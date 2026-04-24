@@ -6070,23 +6070,40 @@ async function handlePoPdfUpload(event) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
 
-    // Extract text from PDF (preserve line structure)
+    // Extract text from PDF (preserve column structure using x-coordinates)
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     let fullText = '';
     let allItems = []; // store all text items with positions
     for (let i = 1; i <= Math.min(pdf.numPages, 10); i++) {
       const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1 });
+      const pageWidth = viewport.width;
       const content = await page.getTextContent();
-      // Group items by Y position (same line)
+      // Group items by Y position (same line), store {x, str} pairs
       const lineMap = {};
       content.items.forEach(item => {
+        if (!item.str.trim()) return;
         const y = Math.round(item.transform[5]);
+        const x = item.transform[4];
         if (!lineMap[y]) lineMap[y] = [];
-        lineMap[y].push(item.str);
+        lineMap[y].push({ x, str: item.str });
       });
-      // Sort by Y descending (top to bottom), join each line
-      const lines = Object.keys(lineMap).sort((a,b) => b-a).map(y => lineMap[y].join(' '));
+      // Sort by Y descending (top to bottom)
+      // For each line, sort items by x, then build a fixed-width string
+      // Map x coordinate (0..pageWidth) to character position (0..120)
+      const charWidth = pageWidth / 120;
+      const lines = Object.keys(lineMap).sort((a,b) => b-a).map(y => {
+        const items = lineMap[y].sort((a,b) => a.x - b.x);
+        // Build a 120-char wide string with items placed at their column positions
+        let row = ' '.repeat(120);
+        items.forEach(({ x, str }) => {
+          const col = Math.max(0, Math.min(119, Math.round(x / charWidth)));
+          // Insert str at col position
+          row = row.slice(0, col) + str + row.slice(col + str.length);
+        });
+        return row.trimEnd();
+      });
       fullText += lines.join('\n') + '\n';
       allItems = allItems.concat(content.items);
     }
