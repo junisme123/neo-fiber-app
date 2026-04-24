@@ -5717,17 +5717,22 @@ function editPoForecastRow(idx) {
   if (idx < 0 || idx >= rows.length) return;
   const r = rows[idx];
 
-  // Calculate payment days
-  const info = customerInfo[r.clientKey] || DEFAULT_CUSTOMER_INFO[r.clientKey] || {};
-  const payDays = r.payDays || info.paymentDays || 45;
+  // Store lines in window variable for dynamic editing
+  window._poEditLines = (r.lines || []).map(l => ({...l}));
 
   // Build client options
   const clientOptions = buildClientOptions(r.clientKey);
 
+  // Widen modal
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay) overlay.style.alignItems = 'flex-start';
+  const modalBox = document.getElementById('modalBox');
+  if (modalBox) modalBox.style.maxWidth = '860px';
+
   showModal(`
-    <div style="max-width:640px">
-      <h3 style="margin-bottom:4px;color:var(--primary)">✏️ Edit PO Forecast Record</h3>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Editing PO: <strong>${escapeXml(r.poNo)}</strong> — Modify fields and save.</div>
+    <div style="max-width:860px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">&#9999;&#65039; Edit PO Forecast Record</h3>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Editing PO: <strong>${escapeXml(r.poNo)}</strong> &mdash; Modify fields and line items, then save.</div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
@@ -5749,12 +5754,33 @@ function editPoForecastRow(idx) {
           <input type="date" id="po_edit_payDate" value="${r.paymentDate||''}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
-          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD)</label>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum from lines)</span></label>
           <input type="number" id="po_edit_amount" value="${(r.amount||0).toFixed(2)}" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Notes</label>
           <input type="text" id="po_edit_notes" value="${escapeXml(r.notes||'')}" placeholder="Optional notes" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+      </div>
+
+      <!-- Editable Line Items Table -->
+      <div style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128221; Line Items <span id="po_edit_lineCount" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="poEditAddLine()">+ Add Row</button>
+        </div>
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#f0f4f8;position:sticky;top:0">
+              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:110px">Item Code</th>
+              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:160px">Description</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:70px">Qty</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Unit Price</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Amount</th>
+              <th style="padding:5px 6px;border-bottom:1px solid #ddd;width:30px"></th>
+            </tr></thead>
+            <tbody id="po_edit_linesTbody"></tbody>
+          </table>
         </div>
       </div>
 
@@ -5764,6 +5790,82 @@ function editPoForecastRow(idx) {
       </div>
     </div>
   `);
+
+  // Render editable lines after modal is shown
+  _renderPoEditLines();
+}
+
+function _renderPoEditLines() {
+  const tbody = document.getElementById('po_edit_linesTbody');
+  const countEl = document.getElementById('po_edit_lineCount');
+  if (!tbody) return;
+  const lines = window._poEditLines || [];
+  if (countEl) countEl.textContent = `(${lines.length} items)`;
+  tbody.innerHTML = lines.map((l, i) => `
+    <tr style="background:${i%2===0?'white':'#f9fafb'}">
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="text" value="${escapeXml(l.itemCode||'')}" oninput="_poEditLineChange(${i},'itemCode',this.value)"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="text" value="${escapeXml(l.description||'')}" oninput="_poEditLineChange(${i},'description',this.value)"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" value="${l.qty||''}" oninput="_poEditLineChange(${i},'qty',this.value);_poEditRecalcAmount(${i})"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" value="${l.unitPrice||''}" step="0.01" oninput="_poEditLineChange(${i},'unitPrice',this.value);_poEditRecalcAmount(${i})"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" id="po_edit_line_amt_${i}" value="${l.amount||''}" step="0.01" oninput="_poEditLineChange(${i},'amount',this.value);_poEditSyncTotal()"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee;text-align:center">
+        <button onclick="_poEditRemoveLine(${i})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:14px;padding:2px 4px" title="Remove row">&times;</button>
+      </td>
+    </tr>
+  `).join('');
+  _poEditSyncTotal();
+}
+
+function _poEditLineChange(i, field, val) {
+  if (!window._poEditLines) return;
+  window._poEditLines[i][field] = field === 'qty' || field === 'unitPrice' || field === 'amount' ? parseFloat(val)||0 : val;
+}
+
+function _poEditRecalcAmount(i) {
+  if (!window._poEditLines) return;
+  const l = window._poEditLines[i];
+  const qty = parseFloat(l.qty) || 0;
+  const up = parseFloat(l.unitPrice) || 0;
+  if (qty && up) {
+    l.amount = Math.round(qty * up * 100) / 100;
+    const amtEl = document.getElementById(`po_edit_line_amt_${i}`);
+    if (amtEl) amtEl.value = l.amount.toFixed(2);
+  }
+  _poEditSyncTotal();
+}
+
+function _poEditSyncTotal() {
+  const lines = window._poEditLines || [];
+  const total = lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
+  const amtEl = document.getElementById('po_edit_amount');
+  if (amtEl) amtEl.value = total.toFixed(2);
+}
+
+function poEditAddLine() {
+  if (!window._poEditLines) window._poEditLines = [];
+  window._poEditLines.push({ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 });
+  _renderPoEditLines();
+}
+
+function _poEditRemoveLine(i) {
+  if (!window._poEditLines) return;
+  window._poEditLines.splice(i, 1);
+  _renderPoEditLines();
 }
 
 function updatePoEditPaymentDate() {
@@ -5805,6 +5907,9 @@ function savePoForecastEdit(idx) {
   const rows = loadPoForecast();
   if (idx < 0 || idx >= rows.length) { toast('Record not found', 'error'); return; }
 
+  // Collect user-edited line items from the modal
+  const editedLines = (window._poEditLines || rows[idx].lines || []).filter(l => l.itemCode || l.description || l.qty);
+
   const updatedRow = {
     ...rows[idx],
     poNo: poNo || rows[idx].poNo,
@@ -5815,24 +5920,27 @@ function savePoForecastEdit(idx) {
     payDays,
     amount,
     notes,
+    lines: editedLines,
     lastEdited: new Date().toISOString()
   };
   rows[idx] = updatedRow;
   savePoForecast(rows);
 
-  // Update Order Status records linked to this PO
+  // Update Order Status records linked to this PO (with edited lines)
   const linesData = {
     poNo: updatedRow.poNo,
     shipDate: updatedRow.shipDate,
     notes: updatedRow.notes,
-    lines: []
+    lines: editedLines
   };
   createOrderStatusFromPo(linesData, clientKey);
+  // Clear temp editing state
+  window._poEditLines = null;
 
   closeModal();
   renderPoTable(rows);
   renderCashflow();
-  toast(`✓ PO ${updatedRow.poNo} updated (Payment due: ${paymentDate})`, 'success');
+  toast(`\u2713 PO ${updatedRow.poNo} updated (Payment due: ${paymentDate})`, 'success');
 }
 
 // ── Convert PO Forecast to Invoice ───────────────────────────
@@ -6284,38 +6392,21 @@ function showPoConfirmDialog(parsed, filename) {
   // Build client options (including custom clients)
   const clientOptions = buildClientOptions(clientKey);
 
-  // Build lines table
-  const lines = parsed.lines || [];
-  const linesHtml = lines.length > 0 ? `
-    <div style="margin-top:12px">
-      <div style="font-size:12px;font-weight:600;color:var(--primary);margin-bottom:6px">Line Items (${lines.length} items)</div>
-      <div style="max-height:200px;overflow-y:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="background:#f0f4f8">
-          <th style="padding:4px 8px;text-align:left;border:1px solid #ddd">Item Code</th>
-          <th style="padding:4px 8px;text-align:left;border:1px solid #ddd">Description</th>
-          <th style="padding:4px 8px;text-align:right;border:1px solid #ddd">Qty</th>
-          <th style="padding:4px 8px;text-align:right;border:1px solid #ddd">Unit Price</th>
-          <th style="padding:4px 8px;text-align:right;border:1px solid #ddd">Amount</th>
-        </tr></thead>
-        <tbody>
-          ${lines.map((l,i) => `<tr style="background:${i%2===0?'white':'#f9f9f9'}">
-            <td style="padding:4px 8px;border:1px solid #ddd">${escapeXml(l.itemCode||'')}</td>
-            <td style="padding:4px 8px;border:1px solid #ddd">${escapeXml(l.description||'')}</td>
-            <td style="padding:4px 8px;text-align:right;border:1px solid #ddd">${l.qty||0}</td>
-            <td style="padding:4px 8px;text-align:right;border:1px solid #ddd">$${(l.unitPrice||0).toFixed(2)}</td>
-            <td style="padding:4px 8px;text-align:right;border:1px solid #ddd;font-weight:600">$${(l.amount||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table></div>
-    </div>` : '';
+  // Store lines in a window variable for dynamic editing
+  window._poConfirmLines = (parsed.lines || []).map(l => ({...l}));
 
-  const totalAmt = parsed.totalAmount || lines.reduce((s,l) => s+(l.amount||0), 0);
+  const totalAmt = parsed.totalAmount || (parsed.lines||[]).reduce((s,l) => s+(l.amount||0), 0);
+
+  // Build the modal overlay with wider width
+  const overlay = document.getElementById('modalOverlay');
+  if (overlay) overlay.style.alignItems = 'flex-start';
+  const modalBox = document.getElementById('modalBox');
+  if (modalBox) modalBox.style.maxWidth = '860px';
 
   showModal(`
-    <div style="max-width:640px">
-      <h3 style="margin-bottom:4px;color:var(--primary)">📄 PO Recognition Result</h3>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} — Please verify and adjust before confirming.</div>
+    <div style="max-width:860px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">&#128196; PO Recognition Result</h3>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} &mdash; Please verify and adjust before confirming.</div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
@@ -6337,7 +6428,7 @@ function showPoConfirmDialog(parsed, filename) {
           <input type="date" id="po_confirm_payDate" value="${paymentDate}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
-          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD)</label>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum from lines)</span></label>
           <input type="number" id="po_confirm_amount" value="${totalAmt.toFixed(2)}" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
@@ -6346,14 +6437,109 @@ function showPoConfirmDialog(parsed, filename) {
         </div>
       </div>
 
-      ${linesHtml}
+      <!-- Editable Line Items Table -->
+      <div style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128221; Line Items <span id="po_confirm_lineCount" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="poConfirmAddLine()">+ Add Row</button>
+        </div>
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="po_confirm_linesTable">
+            <thead><tr style="background:#f0f4f8;position:sticky;top:0">
+              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:110px">Item Code</th>
+              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:160px">Description</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:70px">Qty</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Unit Price</th>
+              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Amount</th>
+              <th style="padding:5px 6px;border-bottom:1px solid #ddd;width:30px"></th>
+            </tr></thead>
+            <tbody id="po_confirm_linesTbody"></tbody>
+          </table>
+        </div>
+      </div>
 
       <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-success" onclick="confirmPoImport()">✓ Confirm & Save to Forecast</button>
+        <button class="btn btn-success" onclick="confirmPoImport()">&#10003; Confirm &amp; Save to Forecast</button>
       </div>
     </div>
   `);
+
+  // Render editable lines after modal is shown
+  _renderPoConfirmLines();
+}
+
+function _renderPoConfirmLines() {
+  const tbody = document.getElementById('po_confirm_linesTbody');
+  const countEl = document.getElementById('po_confirm_lineCount');
+  if (!tbody) return;
+  const lines = window._poConfirmLines || [];
+  if (countEl) countEl.textContent = `(${lines.length} items)`;
+  tbody.innerHTML = lines.map((l, i) => `
+    <tr style="background:${i%2===0?'white':'#f9fafb'}">
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="text" value="${escapeXml(l.itemCode||'')}" oninput="_poConfirmLineChange(${i},'itemCode',this.value)"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="text" value="${escapeXml(l.description||'')}" oninput="_poConfirmLineChange(${i},'description',this.value)"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" value="${l.qty||''}" oninput="_poConfirmLineChange(${i},'qty',this.value);_poConfirmRecalcAmount(${i})"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" value="${l.unitPrice||''}" step="0.01" oninput="_poConfirmLineChange(${i},'unitPrice',this.value);_poConfirmRecalcAmount(${i})"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee">
+        <input type="number" id="po_confirm_line_amt_${i}" value="${l.amount||''}" step="0.01" oninput="_poConfirmLineChange(${i},'amount',this.value);_poConfirmSyncTotal()"
+          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+      </td>
+      <td style="padding:2px 4px;border-bottom:1px solid #eee;text-align:center">
+        <button onclick="_poConfirmRemoveLine(${i})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:14px;padding:2px 4px" title="Remove row">&times;</button>
+      </td>
+    </tr>
+  `).join('');
+  _poConfirmSyncTotal();
+}
+
+function _poConfirmLineChange(i, field, val) {
+  if (!window._poConfirmLines) return;
+  window._poConfirmLines[i][field] = field === 'qty' || field === 'unitPrice' || field === 'amount' ? parseFloat(val)||0 : val;
+}
+
+function _poConfirmRecalcAmount(i) {
+  if (!window._poConfirmLines) return;
+  const l = window._poConfirmLines[i];
+  const qty = parseFloat(l.qty) || 0;
+  const up = parseFloat(l.unitPrice) || 0;
+  if (qty && up) {
+    l.amount = Math.round(qty * up * 100) / 100;
+    const amtEl = document.getElementById(`po_confirm_line_amt_${i}`);
+    if (amtEl) amtEl.value = l.amount.toFixed(2);
+  }
+  _poConfirmSyncTotal();
+}
+
+function _poConfirmSyncTotal() {
+  const lines = window._poConfirmLines || [];
+  const total = lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
+  const amtEl = document.getElementById('po_confirm_amount');
+  if (amtEl) amtEl.value = total.toFixed(2);
+}
+
+function poConfirmAddLine() {
+  if (!window._poConfirmLines) window._poConfirmLines = [];
+  window._poConfirmLines.push({ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 });
+  _renderPoConfirmLines();
+}
+
+function _poConfirmRemoveLine(i) {
+  if (!window._poConfirmLines) return;
+  window._poConfirmLines.splice(i, 1);
+  _renderPoConfirmLines();
 }
 
 function updatePoPaymentDate() {
@@ -6393,7 +6579,8 @@ function confirmPoImport() {
     paymentDate = d.toISOString().split('T')[0];
   }
 
-  const parsedLines = window._lastParsedPoLines || [];
+  // Use user-edited lines from the modal (window._poConfirmLines), fallback to original parsed lines
+  const editedLines = (window._poConfirmLines || window._lastParsedPoLines || []).filter(l => l.itemCode || l.description || l.qty);
   const newRow = {
     poNo: poNo || 'PO-' + Date.now(),
     client: clientLabel,
@@ -6405,7 +6592,7 @@ function confirmPoImport() {
     notes,
     source: 'pdf',
     importedAt: new Date().toISOString(),
-    lines: parsedLines  // Store line items for future Invoice conversion
+    lines: editedLines  // Store user-edited line items for future Invoice conversion
   };
 
   // Add to PO forecast (avoid duplicate by poNo+clientKey)
@@ -6424,9 +6611,11 @@ function confirmPoImport() {
     poNo: newRow.poNo,
     shipDate: newRow.shipDate,
     notes: newRow.notes,
-    lines: parsedLines
+    lines: editedLines
   };
   const addedOrders = createOrderStatusFromPo(linesData, clientKey);
+  // Clear temp editing state
+  window._poConfirmLines = null;
 
   closeModal();
   document.getElementById('cf_clearPoBtn').style.display = '';
@@ -9490,11 +9679,15 @@ function showModal(html) {
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.id = 'modalOverlay';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
-    overlay.innerHTML = '<div id="modalBox" style="background:white;border-radius:12px;padding:24px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,0.3)"></div>';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+    overlay.innerHTML = '<div id="modalBox" style="background:white;border-radius:12px;padding:24px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,0.3);margin:auto"></div>';
     document.body.appendChild(overlay);
   }
-  document.getElementById('modalBox').innerHTML = html;
+  // Reset modal width to default before each use
+  const modalBox = document.getElementById('modalBox');
+  modalBox.style.maxWidth = '560px';
+  overlay.style.alignItems = 'center';
+  modalBox.innerHTML = html;
   overlay.style.display = 'flex';
 }
 function closeModal() {
