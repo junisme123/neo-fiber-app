@@ -6372,16 +6372,54 @@ ${pdfText.slice(0, 8000)}`;
   }
 }
 
+// ── Helper: fuzzy match item code from priceDB ──────────────
+function _poMatchItemCode(rawCode, rawDesc, clientKey) {
+  // Get items from priceDB for the client
+  const db = priceDB[clientKey];
+  if (!db || !db.items || db.items.length === 0) return [];
+  const items = db.items;
+  const codeUpper = (rawCode || '').toUpperCase().trim();
+  const descUpper = (rawDesc || '').toUpperCase().trim();
+
+  const scored = items.map(item => {
+    const ic = (item.customerCode || item.itemCode || '').toUpperCase();
+    const nf = (item.nfItem || '').toUpperCase();
+    const flex = (item.flex || '').toUpperCase();
+    let score = 0;
+    // Exact match
+    if (ic === codeUpper) score += 100;
+    else if (ic.includes(codeUpper) || codeUpper.includes(ic)) score += 60;
+    // Partial token match
+    const codeTokens = codeUpper.split(/[\s\-\/]+/);
+    const icTokens = ic.split(/[\s\-\/]+/);
+    codeTokens.forEach(t => { if (t.length > 2 && ic.includes(t)) score += 15; });
+    icTokens.forEach(t => { if (t.length > 2 && codeUpper.includes(t)) score += 10; });
+    // Description match
+    if (descUpper && nf && descUpper.includes(nf.split(' ')[0])) score += 20;
+    if (descUpper && flex && descUpper.includes(flex)) score += 10;
+    return { item, score };
+  });
+  return scored.filter(s => s.score > 0).sort((a,b) => b.score - a.score).slice(0, 8);
+}
+
+// Build item code <datalist> options for a given client
+function _poItemCodeOptions(clientKey) {
+  const db = priceDB[clientKey];
+  if (!db || !db.items) return '';
+  return db.items.map(item => {
+    const ic = item.customerCode || item.itemCode || '';
+    return `<option value="${escapeXml(ic)}" data-price="${item.price||0}" data-nf="${escapeXml(item.nfItem||'')}" data-flex="${escapeXml(item.flex||'')}">`;
+  }).join('');
+}
+
 function showPoConfirmDialog(parsed, filename) {
   // Store lines for Order Status creation after confirm
   window._lastParsedPoLines = parsed.lines || [];
 
-  // Find matching client payment days
   const clientKey = parsed.clientKey || '';
   const info = customerInfo[clientKey] || DEFAULT_CUSTOMER_INFO[clientKey] || {};
   const payDays = info.paymentDays || 45;
 
-  // Calculate payment date
   let paymentDate = '';
   if (parsed.shipDate) {
     const d = new Date(parsed.shipDate);
@@ -6389,33 +6427,57 @@ function showPoConfirmDialog(parsed, filename) {
     paymentDate = d.toISOString().split('T')[0];
   }
 
-  // Build client options (including custom clients)
   const clientOptions = buildClientOptions(clientKey);
 
-  // Store lines in a window variable for dynamic editing
-  window._poConfirmLines = (parsed.lines || []).map(l => ({...l}));
+  // Build confirmed lines: each raw parsed line becomes a "group" with sub-rows
+  // Each group shows the original recognized text + one or more mapped rows
+  const rawLines = parsed.lines || [];
+  // _poConfirmGroups: array of { _raw: {itemCode,description,qty,unitPrice,amount}, rows: [{itemCode,description,qty,unitPrice,amount,flex,nfSpec}] }
+  window._poConfirmGroups = rawLines.map(l => {
+    const matches = _poMatchItemCode(l.itemCode, l.description, clientKey);
+    const bestMatch = matches[0];
+    const mappedRow = {
+      itemCode: bestMatch ? (bestMatch.item.customerCode || bestMatch.item.itemCode || l.itemCode) : l.itemCode,
+      description: l.description || '',
+      qty: l.qty || 0,
+      unitPrice: bestMatch ? (bestMatch.item.price || l.unitPrice || 0) : (l.unitPrice || 0),
+      amount: 0,
+      flex: bestMatch ? (bestMatch.item.flex || '') : '',
+      nfSpec: bestMatch ? (bestMatch.item.nfItem || '') : '',
+      _autoMatched: bestMatch ? bestMatch.score : 0
+    };
+    mappedRow.amount = Math.round((mappedRow.qty * mappedRow.unitPrice) * 100) / 100 || l.amount || 0;
+    return {
+      _raw: { itemCode: l.itemCode, description: l.description, qty: l.qty, unitPrice: l.unitPrice, amount: l.amount },
+      rows: [mappedRow]
+    };
+  });
+  // If no raw lines, start with one empty group
+  if (window._poConfirmGroups.length === 0) {
+    window._poConfirmGroups = [{ _raw: null, rows: [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0, flex:'', nfSpec:'' }] }];
+  }
 
-  const totalAmt = parsed.totalAmount || (parsed.lines||[]).reduce((s,l) => s+(l.amount||0), 0);
+  const totalAmt = parsed.totalAmount || rawLines.reduce((s,l) => s+(l.amount||0), 0);
 
-  // Build the modal overlay with wider width
+  // Widen modal
   const overlay = document.getElementById('modalOverlay');
   if (overlay) overlay.style.alignItems = 'flex-start';
   const modalBox = document.getElementById('modalBox');
-  if (modalBox) modalBox.style.maxWidth = '860px';
+  if (modalBox) modalBox.style.maxWidth = '960px';
 
   showModal(`
-    <div style="max-width:860px">
+    <div style="max-width:960px">
       <h3 style="margin-bottom:4px;color:var(--primary)">&#128196; PO Recognition Result</h3>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} &mdash; Please verify and adjust before confirming.</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} &mdash; Review auto-matched items. You can split rows, change mappings, or add rows manually.</div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
         <div>
           <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
           <input type="text" id="po_confirm_poNo" value="${escapeXml(parsed.poNo||'')}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Client</label>
-          <select id="po_confirm_client" onchange="updatePoPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          <select id="po_confirm_client" onchange="updatePoPaymentDate();_renderPoConfirmGroups()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
             ${clientOptions}
           </select>
         </div>
@@ -6428,7 +6490,7 @@ function showPoConfirmDialog(parsed, filename) {
           <input type="date" id="po_confirm_payDate" value="${paymentDate}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
-          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum from lines)</span></label>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum)</span></label>
           <input type="number" id="po_confirm_amount" value="${totalAmt.toFixed(2)}" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
@@ -6437,25 +6499,13 @@ function showPoConfirmDialog(parsed, filename) {
         </div>
       </div>
 
-      <!-- Editable Line Items Table -->
-      <div style="margin-top:16px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128221; Line Items <span id="po_confirm_lineCount" style="font-weight:400;color:var(--text-muted)"></span></div>
-          <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="poConfirmAddLine()">+ Add Row</button>
+      <!-- Item Mapping Section -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div style="background:#f0f4f8;padding:8px 12px;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128279; Item Mapping <span id="po_confirm_groupCount" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poConfirmAddGroup()">+ Add Row</button>
         </div>
-        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
-          <table style="width:100%;border-collapse:collapse;font-size:12px" id="po_confirm_linesTable">
-            <thead><tr style="background:#f0f4f8;position:sticky;top:0">
-              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:110px">Item Code</th>
-              <th style="padding:5px 6px;text-align:left;border-bottom:1px solid #ddd;min-width:160px">Description</th>
-              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:70px">Qty</th>
-              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Unit Price</th>
-              <th style="padding:5px 6px;text-align:right;border-bottom:1px solid #ddd;width:90px">Amount</th>
-              <th style="padding:5px 6px;border-bottom:1px solid #ddd;width:30px"></th>
-            </tr></thead>
-            <tbody id="po_confirm_linesTbody"></tbody>
-          </table>
-        </div>
+        <div id="po_confirm_groupsContainer" style="max-height:400px;overflow-y:auto"></div>
       </div>
 
       <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
@@ -6465,81 +6515,155 @@ function showPoConfirmDialog(parsed, filename) {
     </div>
   `);
 
-  // Render editable lines after modal is shown
-  _renderPoConfirmLines();
+  _renderPoConfirmGroups();
 }
 
-function _renderPoConfirmLines() {
-  const tbody = document.getElementById('po_confirm_linesTbody');
-  const countEl = document.getElementById('po_confirm_lineCount');
-  if (!tbody) return;
-  const lines = window._poConfirmLines || [];
-  if (countEl) countEl.textContent = `(${lines.length} items)`;
-  tbody.innerHTML = lines.map((l, i) => `
-    <tr style="background:${i%2===0?'white':'#f9fafb'}">
-      <td style="padding:2px 4px;border-bottom:1px solid #eee">
-        <input type="text" value="${escapeXml(l.itemCode||'')}" oninput="_poConfirmLineChange(${i},'itemCode',this.value)"
-          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-      </td>
-      <td style="padding:2px 4px;border-bottom:1px solid #eee">
-        <input type="text" value="${escapeXml(l.description||'')}" oninput="_poConfirmLineChange(${i},'description',this.value)"
-          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-      </td>
-      <td style="padding:2px 4px;border-bottom:1px solid #eee">
-        <input type="number" value="${l.qty||''}" oninput="_poConfirmLineChange(${i},'qty',this.value);_poConfirmRecalcAmount(${i})"
-          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
-      </td>
-      <td style="padding:2px 4px;border-bottom:1px solid #eee">
-        <input type="number" value="${l.unitPrice||''}" step="0.01" oninput="_poConfirmLineChange(${i},'unitPrice',this.value);_poConfirmRecalcAmount(${i})"
-          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
-      </td>
-      <td style="padding:2px 4px;border-bottom:1px solid #eee">
-        <input type="number" id="po_confirm_line_amt_${i}" value="${l.amount||''}" step="0.01" oninput="_poConfirmLineChange(${i},'amount',this.value);_poConfirmSyncTotal()"
-          style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
-      </td>
-      <td style="padding:2px 4px;border-bottom:1px solid #eee;text-align:center">
-        <button onclick="_poConfirmRemoveLine(${i})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:14px;padding:2px 4px" title="Remove row">&times;</button>
-      </td>
-    </tr>
-  `).join('');
+function _renderPoConfirmGroups() {
+  const container = document.getElementById('po_confirm_groupsContainer');
+  const countEl = document.getElementById('po_confirm_groupCount');
+  if (!container) return;
+  const groups = window._poConfirmGroups || [];
+  const clientKey = document.getElementById('po_confirm_client')?.value || '';
+  const totalRows = groups.reduce((s,g) => s + g.rows.length, 0);
+  if (countEl) countEl.textContent = `(${groups.length} recognized, ${totalRows} mapped rows)`;
+
+  // Build datalist for item code autocomplete
+  const datalistId = 'po_confirm_itemlist';
+  let datalistHtml = `<datalist id="${datalistId}">${_poItemCodeOptions(clientKey)}</datalist>`;
+
+  container.innerHTML = datalistHtml + groups.map((group, gi) => {
+    const raw = group._raw;
+    const rawHtml = raw ? `
+      <div style="background:#fffbeb;border-bottom:1px solid #fde68a;padding:6px 10px;font-size:11px;color:#92400e;display:flex;align-items:flex-start;gap:8px">
+        <span style="font-weight:600;white-space:nowrap">&#128269; Recognized:</span>
+        <span style="flex:1">
+          <strong>${escapeXml(raw.itemCode||'(no code)')}</strong>
+          ${raw.description ? '&nbsp;&mdash;&nbsp;' + escapeXml(raw.description) : ''}
+          &nbsp;|&nbsp; Qty: ${raw.qty||0} &nbsp;|&nbsp; Unit: $${(raw.unitPrice||0).toFixed(2)} &nbsp;|&nbsp; Amt: $${(raw.amount||0).toFixed(2)}
+        </span>
+        <button onclick="_poConfirmRemoveGroup(${gi})" style="background:none;border:none;color:#b45309;cursor:pointer;font-size:13px;padding:0 2px" title="Remove this group">&times;</button>
+      </div>` : '';
+
+    const rowsHtml = group.rows.map((row, ri) => {
+      const matchBadge = row._autoMatched > 0
+        ? `<span style="font-size:9px;background:${row._autoMatched>=60?'#d1fae5':'#fef3c7'};color:${row._autoMatched>=60?'#065f46':'#92400e'};padding:1px 5px;border-radius:3px;margin-left:4px">${row._autoMatched>=60?'&#10003; matched':'~ partial'}</span>`
+        : '';
+      return `
+        <div style="display:grid;grid-template-columns:180px 1fr 65px 85px 85px 28px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${ri%2===0?'white':'#fafafa'}">
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Item Code${matchBadge}</div>
+            <input type="text" list="${datalistId}" value="${escapeXml(row.itemCode||'')}" 
+              oninput="_poGroupRowChange(${gi},${ri},'itemCode',this.value)" 
+              onchange="_poGroupRowSelectItem(${gi},${ri},this.value)"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Description / NF Spec</div>
+            <input type="text" value="${escapeXml(row.description||row.nfSpec||'')}" 
+              oninput="_poGroupRowChange(${gi},${ri},'description',this.value)"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Qty</div>
+            <input type="number" value="${row.qty||''}" 
+              oninput="_poGroupRowChange(${gi},${ri},'qty',this.value);_poGroupRowRecalc(${gi},${ri})"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Unit Price</div>
+            <input type="number" value="${row.unitPrice||''}" step="0.01"
+              oninput="_poGroupRowChange(${gi},${ri},'unitPrice',this.value);_poGroupRowRecalc(${gi},${ri})"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Amount</div>
+            <input type="number" id="po_grp_amt_${gi}_${ri}" value="${row.amount||''}" step="0.01"
+              oninput="_poGroupRowChange(${gi},${ri},'amount',this.value);_poConfirmSyncTotal()"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px;align-items:center">
+            ${group.rows.length > 1 ? `<button onclick="_poGroupRemoveRow(${gi},${ri})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:13px;padding:0" title="Remove row">&times;</button>` : ''}
+            ${ri === group.rows.length - 1 ? `<button onclick="_poGroupSplitRow(${gi})" style="background:none;border:none;color:#2563eb;cursor:pointer;font-size:11px;padding:0" title="Split: add another mapped row for this PO line">&#10133;</button>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    return `<div style="border-bottom:2px solid #e5e7eb">${rawHtml}${rowsHtml}</div>`;
+  }).join('');
+
   _poConfirmSyncTotal();
 }
 
-function _poConfirmLineChange(i, field, val) {
-  if (!window._poConfirmLines) return;
-  window._poConfirmLines[i][field] = field === 'qty' || field === 'unitPrice' || field === 'amount' ? parseFloat(val)||0 : val;
+function _poGroupRowChange(gi, ri, field, val) {
+  const g = (window._poConfirmGroups||[])[gi];
+  if (!g || !g.rows[ri]) return;
+  g.rows[ri][field] = (field==='qty'||field==='unitPrice'||field==='amount') ? parseFloat(val)||0 : val;
 }
 
-function _poConfirmRecalcAmount(i) {
-  if (!window._poConfirmLines) return;
-  const l = window._poConfirmLines[i];
-  const qty = parseFloat(l.qty) || 0;
-  const up = parseFloat(l.unitPrice) || 0;
+function _poGroupRowRecalc(gi, ri) {
+  const g = (window._poConfirmGroups||[])[gi];
+  if (!g || !g.rows[ri]) return;
+  const row = g.rows[ri];
+  const qty = parseFloat(row.qty)||0;
+  const up = parseFloat(row.unitPrice)||0;
   if (qty && up) {
-    l.amount = Math.round(qty * up * 100) / 100;
-    const amtEl = document.getElementById(`po_confirm_line_amt_${i}`);
-    if (amtEl) amtEl.value = l.amount.toFixed(2);
+    row.amount = Math.round(qty*up*100)/100;
+    const el = document.getElementById(`po_grp_amt_${gi}_${ri}`);
+    if (el) el.value = row.amount.toFixed(2);
   }
   _poConfirmSyncTotal();
 }
 
+function _poGroupRowSelectItem(gi, ri, itemCodeVal) {
+  // When user selects/types an item code, auto-fill price from priceDB
+  const clientKey = document.getElementById('po_confirm_client')?.value || '';
+  const db = priceDB[clientKey];
+  if (!db || !db.items) return;
+  const found = db.items.find(item => (item.customerCode||item.itemCode||'').toLowerCase() === itemCodeVal.toLowerCase());
+  if (!found) return;
+  const g = (window._poConfirmGroups||[])[gi];
+  if (!g || !g.rows[ri]) return;
+  g.rows[ri].unitPrice = found.price || g.rows[ri].unitPrice;
+  g.rows[ri].flex = found.flex || '';
+  g.rows[ri].nfSpec = found.nfItem || '';
+  g.rows[ri]._autoMatched = 100;
+  _renderPoConfirmGroups();
+}
+
+function _poGroupSplitRow(gi) {
+  const g = (window._poConfirmGroups||[])[gi];
+  if (!g) return;
+  // Add a new empty row to this group for splitting
+  const lastRow = g.rows[g.rows.length-1];
+  g.rows.push({ itemCode:'', description: lastRow.description||'', qty:0, unitPrice:0, amount:0, flex:'', nfSpec:'', _autoMatched:0 });
+  _renderPoConfirmGroups();
+}
+
+function _poGroupRemoveRow(gi, ri) {
+  const g = (window._poConfirmGroups||[])[gi];
+  if (!g || g.rows.length <= 1) return;
+  g.rows.splice(ri, 1);
+  _renderPoConfirmGroups();
+}
+
+function _poConfirmRemoveGroup(gi) {
+  if (!window._poConfirmGroups) return;
+  window._poConfirmGroups.splice(gi, 1);
+  _renderPoConfirmGroups();
+}
+
+function _poConfirmAddGroup() {
+  if (!window._poConfirmGroups) window._poConfirmGroups = [];
+  window._poConfirmGroups.push({ _raw: null, rows: [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0, flex:'', nfSpec:'' }] });
+  _renderPoConfirmGroups();
+}
+
 function _poConfirmSyncTotal() {
-  const lines = window._poConfirmLines || [];
-  const total = lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
+  const groups = window._poConfirmGroups || [];
+  let total = 0;
+  groups.forEach(g => g.rows.forEach(r => { total += parseFloat(r.amount)||0; }));
   const amtEl = document.getElementById('po_confirm_amount');
   if (amtEl) amtEl.value = total.toFixed(2);
-}
-
-function poConfirmAddLine() {
-  if (!window._poConfirmLines) window._poConfirmLines = [];
-  window._poConfirmLines.push({ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 });
-  _renderPoConfirmLines();
-}
-
-function _poConfirmRemoveLine(i) {
-  if (!window._poConfirmLines) return;
-  window._poConfirmLines.splice(i, 1);
-  _renderPoConfirmLines();
 }
 
 function updatePoPaymentDate() {
@@ -6579,8 +6703,27 @@ function confirmPoImport() {
     paymentDate = d.toISOString().split('T')[0];
   }
 
-  // Use user-edited lines from the modal (window._poConfirmLines), fallback to original parsed lines
-  const editedLines = (window._poConfirmLines || window._lastParsedPoLines || []).filter(l => l.itemCode || l.description || l.qty);
+  // Collect all mapped rows from _poConfirmGroups (new design) or fallback to _poConfirmLines
+  let editedLines = [];
+  if (window._poConfirmGroups && window._poConfirmGroups.length > 0) {
+    window._poConfirmGroups.forEach(group => {
+      group.rows.forEach(row => {
+        if (row.itemCode || row.description || row.qty) {
+          editedLines.push({
+            itemCode: row.itemCode || '',
+            description: row.description || row.nfSpec || '',
+            qty: parseFloat(row.qty) || 0,
+            unitPrice: parseFloat(row.unitPrice) || 0,
+            amount: parseFloat(row.amount) || 0,
+            flex: row.flex || '',
+            nfSpec: row.nfSpec || ''
+          });
+        }
+      });
+    });
+  } else {
+    editedLines = (window._poConfirmLines || window._lastParsedPoLines || []).filter(l => l.itemCode || l.description || l.qty);
+  }
   const newRow = {
     poNo: poNo || 'PO-' + Date.now(),
     client: clientLabel,
@@ -6616,13 +6759,14 @@ function confirmPoImport() {
   const addedOrders = createOrderStatusFromPo(linesData, clientKey);
   // Clear temp editing state
   window._poConfirmLines = null;
+  window._poConfirmGroups = null;
 
   closeModal();
   document.getElementById('cf_clearPoBtn').style.display = '';
   renderPoTable(existing);
   renderCashflow();
   const orderMsg = addedOrders > 0 ? ` + ${addedOrders} order(s) added to Order Status` : '';
-  toast(`✓ PO ${newRow.poNo} added to forecast (Payment due: ${paymentDate})${orderMsg}`, 'success');
+  toast(`\u2713 PO ${newRow.poNo} added to forecast (Payment due: ${paymentDate})${orderMsg}`, 'success');
 }
 
 // Cashflow Excel Export
