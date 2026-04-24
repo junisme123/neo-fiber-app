@@ -6226,12 +6226,47 @@ function parsePoPdfLocal(text, filename) {
     }
   }
 
-  // ── 5. Line Items: parse table structure directly ────────────────────────────────────────────────────────────
-  const lineItems = _parsePoTableLines(text);
+  // ── 5. Line Items ─────────────────────────────────────────
+  const lineItems = [];
+  // Pattern: look for lines with item code + qty + price structure
+  // Common format: ItemCode  Description  Qty  UnitPrice  Amount
+  const lineRe = /([A-Z][A-Z0-9\-\.]{2,20})\s+(.{5,60}?)\s+(\d+)\s+[\$]?([\d,]+\.\d{2})\s+[\$]?([\d,]+\.\d{2})/g;
+  let lm;
+  while ((lm = lineRe.exec(text)) !== null) {
+    const qty = parseInt(lm[3]);
+    const unitPrice = parseFloat(lm[4].replace(/,/g,''));
+    const amount = parseFloat(lm[5].replace(/,/g,''));
+    if (qty > 0 && unitPrice > 0 && amount > 0) {
+      lineItems.push({
+        itemCode: lm[1],
+        description: lm[2].trim(),
+        qty,
+        unitPrice,
+        amount
+      });
+    }
+  }
+  // If no line items found, try simpler pattern
+  if (lineItems.length === 0) {
+    const simpleRe = /([A-Z][A-Z0-9\-\.]{2,20})\s+(\d+)\s+[\$]?([\d,]+\.\d{2})/g;
+    while ((lm = simpleRe.exec(text)) !== null) {
+      const qty = parseInt(lm[2]);
+      const amount = parseFloat(lm[3].replace(/,/g,''));
+      if (qty > 0 && amount > 0) {
+        lineItems.push({
+          itemCode: lm[1],
+          description: '',
+          qty,
+          unitPrice: amount / qty,
+          amount
+        });
+      }
+    }
+  }
 
   // If totalAmount not found, sum line items
   if (totalAmount === 0 && lineItems.length > 0) {
-    totalAmount = lineItems.reduce((s,l) => s + (l.amount||0), 0);
+    totalAmount = lineItems.reduce((s,l) => s + l.amount, 0);
   }
 
   // ── 6. Notes / Special Instructions ────────────────────────────────────────────────────────────
@@ -6253,12 +6288,7 @@ function parsePoPdfLocal(text, filename) {
   };
 }
 
-// ── Parse PO table lines directly from PDF text ────────────────────────────────────────────────────────────
-// Strategy: find the table header row, then extract each data row below it.
-// The table header contains keywords like "Item", "Quantity", "Price", "Amount".
-// Each data row has: item name (text), optional comments, units (EA/PC/SET etc),
-// quantity (integer), unit price (decimal), line amount (decimal).
-function _parsePoTableLines(text) {
+function _parsePoTableLines_UNUSED(text) {
   const rawLines = text.split('\n');
   const results = [];
 
@@ -6399,29 +6429,26 @@ async function parsePoPdfWithAI(pdfText, filename, apiKey) {
 
   const prompt = `You are a purchase order data extraction assistant for Neo-Fiber Industrial.
 
-Your task: Extract ALL line items from the PO table exactly as they appear. Do NOT interpret, merge, or split rows. Each row in the PO table becomes exactly one entry in the lines array.
+Extract ALL purchase order line items from the following PO document text.
 
 Known clients: ${clientList}
 
-The PO table typically has columns: Item, Comments, Units, Quantity, Price, Amount.
-Extract each row as-is, preserving the exact item name from the "Item" column.
-
-Extract:
-- poNo: PO number
-- clientKey: one of the known client keys (match by company name/address in the PO)
+For each line item in the PO, extract:
+- poNo: PO number (the main PO number, same for all lines)
+- clientKey: one of [KS, VA, Gears, TTJ, PGCanada, PGUS] (match by company name/address)
 - clientLabel: the customer company name as written in the PO
-- shipDate: required/ship date in YYYY-MM-DD format
-- currency: currency code (default USD)
-- totalAmount: the total amount shown in the PO
-- notes: any special instructions or notes
-- lines: array of line items, each with:
-  - itemCode: exact item name/code from the Item column (e.g. "RAIJIN 2.0 IR 55", "BDZ Irons - 55A")
-  - units: unit of measure (e.g. EA, PC, SET)
-  - qty: quantity (integer)
-  - unitPrice: unit price (decimal)
-  - amount: line total (decimal)
+- shipDate: shipment/delivery date in YYYY-MM-DD format (if multiple dates, use the earliest)
+- itemCode: item/product code or model number
+- description: product description
+- qty: quantity (number)
+- unitPrice: unit price in USD (number)
+- amount: line total in USD (number, qty * unitPrice if not stated)
 
-Return JSON:
+Also extract:
+- currency: currency code (default USD)
+- notes: any special shipping instructions or notes
+
+Return a JSON object with this structure:
 {
   "poNo": "string",
   "clientKey": "string",
@@ -6431,9 +6458,13 @@ Return JSON:
   "totalAmount": number,
   "notes": "string",
   "lines": [
-    {"itemCode": "string", "units": "string", "qty": number, "unitPrice": number, "amount": number}
+    {"itemCode": "string", "description": "string", "qty": number, "unitPrice": number, "amount": number}
   ]
 }
+
+If a field cannot be determined, use null or empty string.
+For shipDate, if only a month/year is given, use the 1st of that month.
+For totalAmount, sum all line amounts.
 
 PO Document Text:
 ${pdfText.slice(0, 8000)}`;
@@ -6531,13 +6562,13 @@ function showPoConfirmDialog(parsed, filename) {
   // Simple flat array of lines
   window._poLines = (parsed.lines || []).map(l => ({
     itemCode: l.itemCode || '',
-    units: l.units || '',
+    description: l.description || '',
     qty: l.qty || 0,
     unitPrice: l.unitPrice || 0,
     amount: l.amount || 0
   }));
   if (window._poLines.length === 0) {
-    window._poLines = [{ itemCode:'', units:'EA', qty:0, unitPrice:0, amount:0 }];
+    window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
   }
 
   const totalAmt = parsed.totalAmount || window._poLines.reduce((s,l) => s+(l.amount||0), 0);
@@ -6589,11 +6620,11 @@ function showPoConfirmDialog(parsed, filename) {
           <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poLinesAddRow()">+ Add Row</button>
         </div>
         <!-- Table header -->
-        <div style="display:grid;grid-template-columns:1fr 55px 65px 90px 90px 30px;gap:4px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Item</div>
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:center">Units</div>
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Quantity</div>
-          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Price</div>
+        <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Item Code</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Description</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Qty</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Unit Price</div>
           <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Amount</div>
           <div></div>
         </div>
@@ -6616,13 +6647,13 @@ function _renderPoLines() {
   if (!container) return;
   const lines = window._poLines || [];
   container.innerHTML = lines.map((row, i) => `
-    <div style="display:grid;grid-template-columns:1fr 55px 65px 90px 90px 30px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${i%2===0?'white':'#fafafa'}">
-      <input type="text" value="${escapeXml(row.itemCode||'')}" placeholder="Item name"
+    <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${i%2===0?'white':'#fafafa'}">
+      <input type="text" value="${escapeXml(row.itemCode||'')}" placeholder="Item code"
         oninput="_poLinesChange(${i},'itemCode',this.value)"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-      <input type="text" value="${escapeXml(row.units||'')}" placeholder="EA"
-        oninput="_poLinesChange(${i},'units',this.value)"
-        style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:center">
+      <input type="text" value="${escapeXml(row.description||'')}" placeholder="Description"
+        oninput="_poLinesChange(${i},'description',this.value)"
+        style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
       <input type="number" value="${row.qty||''}" placeholder="0"
         oninput="_poLinesChange(${i},'qty',this.value);_poLinesRecalc(${i})"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
@@ -6657,7 +6688,7 @@ function _poLinesRecalc(i) {
 
 function _poLinesAddRow() {
   if (!window._poLines) window._poLines = [];
-  window._poLines.push({ itemCode:'', units:'EA', qty:0, unitPrice:0, amount:0 });
+  window._poLines.push({ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 });
   _renderPoLines();
 }
 
@@ -6713,7 +6744,7 @@ function confirmPoImport() {
   // Collect all rows from _poLines
   const editedLines = (window._poLines || []).filter(r => r.itemCode || r.qty).map(r => ({
     itemCode: r.itemCode || '',
-    units: r.units || '',
+    description: r.description || '',
     qty: parseFloat(r.qty) || 0,
     unitPrice: parseFloat(r.unitPrice) || 0,
     amount: parseFloat(r.amount) || 0
