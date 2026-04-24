@@ -6442,8 +6442,8 @@ function renderOrderStatus() {
   const showTbd = showTbdEl ? showTbdEl.checked : true;
   const groupByPo = groupByPoEl ? groupByPoEl.checked : true;
 
-  // Filter orders
-  let filtered = orders.filter(o => {
+  // Filter orders — preserve original index for correct delete/edit operations
+  let filtered = orders.map((o, origIdx) => ({ order: o, origIdx })).filter(({ order: o }) => {
     if (poFilter && o.poNo !== poFilter) return false;
     const st = computeOrderStatus(o);
     if (statusFilter && st !== statusFilter) return false;
@@ -6473,7 +6473,7 @@ function renderOrderStatus() {
       }
     };
     filtered = [...filtered].sort((a, b) => {
-      const va = getVal(a, osSortCol), vb = getVal(b, osSortCol);
+      const va = getVal(a.order, osSortCol), vb = getVal(b.order, osSortCol);
       if (typeof va === 'number') return (va - vb) * dir;
       return va < vb ? -dir : va > vb ? dir : 0;
     });
@@ -6481,11 +6481,11 @@ function renderOrderStatus() {
 
   // Summary stats (use all orders for accurate totals)
   const totalOrders = filtered.length;
-  const totalQty = filtered.reduce((s, o) => s + (o.qty || 0), 0);
-  const shippedQty = filtered.reduce((s, o) => s + (o.shipments || []).reduce((ss, sh) => ss + (sh.qty || 0), 0), 0);
+  const totalQty = filtered.reduce((s, {order: o}) => s + (o.qty || 0), 0);
+  const shippedQty = filtered.reduce((s, {order: o}) => s + (o.shipments || []).reduce((ss, sh) => ss + (sh.qty || 0), 0), 0);
   const remainQty = totalQty - shippedQty;
-  const tbdCount = filtered.filter(o => computeOrderStatus(o) === 'tbd').length;
-  const totalValue = filtered.reduce((s, o) => s + ((o.qty || 0) * (o.unitPrice || 0)), 0);
+  const tbdCount = filtered.filter(({order: o}) => computeOrderStatus(o) === 'tbd').length;
+  const totalValue = filtered.reduce((s, {order: o}) => s + ((o.qty || 0) * (o.unitPrice || 0)), 0);
 
   document.getElementById('os_totalOrders').textContent = totalOrders;
   document.getElementById('os_totalQty').textContent = totalQty.toLocaleString();
@@ -6557,15 +6557,15 @@ function renderOrderStatus() {
   // Group by PO if enabled
   let poGroups = {};
   if (groupByPo) {
-    filtered.forEach((order, idx) => {
+    filtered.forEach(({ order, origIdx }) => {
       const key = order.poNo || '(No PO)';
       if (!poGroups[key]) poGroups[key] = [];
-      poGroups[key].push({ order, idx });
+      poGroups[key].push({ order, idx: origIdx });
     });
   } else {
-    filtered.forEach((order, idx) => {
-      const key = `__single_${idx}`;
-      poGroups[key] = [{ order, idx }];
+    filtered.forEach(({ order, origIdx }) => {
+      const key = `__single_${origIdx}`;
+      poGroups[key] = [{ order, idx: origIdx }];
     });
   }
 
