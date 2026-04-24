@@ -341,7 +341,7 @@ input[type=number] { -moz-appearance: textfield; }
   <button class="main-tab" onclick="switchTab(&#39;customers&#39;)">👤 Customer Info</button>
   <button class="main-tab active" onclick="switchTab(&#39;orderstatus&#39;)">📦 Orders &amp; Prices</button>
   <button class="main-tab" onclick="switchTab(&#39;history&#39;)">📋 Invoice History</button>
-  <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow</button>
+  <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow &amp; PO Import</button>
 </div>
 
 <div class="content">
@@ -5661,9 +5661,9 @@ function renderPoTable(rows) {
   if (!rows || rows.length === 0) { div.innerHTML = ''; return; }
   div.innerHTML = `
     <div style="font-size:12px;font-weight:600;color:var(--primary);margin-bottom:8px">PO Forecast Records (${rows.length} entries)</div>
-    <div style="max-height:280px;overflow-y:auto">
+    <div style="max-height:320px;overflow-y:auto">
     <table class="history-table">
-      <thead><tr><th>PO#</th><th>Client</th><th>Ship Date</th><th>Payment Date</th><th>Term</th><th>Amount (USD)</th><th>Source</th><th></th></tr></thead>
+      <thead><tr><th>PO#</th><th>Client</th><th>Ship Date</th><th>Payment Date</th><th>Term</th><th>Amount (USD)</th><th>Source</th><th style="min-width:160px">Actions</th></tr></thead>
       <tbody>
         ${rows.slice(0,100).map((r,i) => `<tr>
           <td><strong>${escapeXml(r.poNo)}</strong></td>
@@ -5673,7 +5673,11 @@ function renderPoTable(rows) {
           <td style="font-size:11px;color:var(--text-muted)">+${r.payDays}d</td>
           <td style="color:var(--primary);font-weight:600">$${(r.amount||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
           <td><span class="badge" style="background:${r.source==='pdf'?'#fef3c7':'#dbeafe'};color:${r.source==='pdf'?'#92400e':'#1e40af'};font-size:10px">${r.source==='pdf'?'\ud83d\udcc4 PDF':'\ud83d\udcc2 Excel'}</span></td>
-          <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="deletePoForecastRow(${i})">\u2715</button></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;margin-right:3px" onclick="editPoForecastRow(${i})" title="Edit this PO record">\u270f Edit</button>
+            <button class="btn btn-accent btn-sm" style="padding:2px 8px;font-size:11px;margin-right:3px" onclick="convertPoToInvoice(${i})" title="Create Invoice from this PO">\u2192 Invoice</button>
+            <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="deletePoForecastRow(${i})">\u2715</button>
+          </td>
         </tr>`).join('')}
         ${rows.length > 100 ? `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);font-size:11px">... and ${rows.length-100} more rows</td></tr>` : ''}
       </tbody>
@@ -5705,6 +5709,217 @@ function clearPoForecast() {
   document.getElementById('cf_poTable').innerHTML = '';
   renderCashflow();
   toast('PO Forecast cleared', 'info');
+}
+
+// ── Edit existing PO Forecast row ─────────────────────────────
+function editPoForecastRow(idx) {
+  const rows = loadPoForecast();
+  if (idx < 0 || idx >= rows.length) return;
+  const r = rows[idx];
+
+  // Calculate payment days
+  const info = customerInfo[r.clientKey] || DEFAULT_CUSTOMER_INFO[r.clientKey] || {};
+  const payDays = r.payDays || info.paymentDays || 45;
+
+  // Build client options
+  const clientOptions = buildClientOptions(r.clientKey);
+
+  showModal(`
+    <div style="max-width:640px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">✏️ Edit PO Forecast Record</h3>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Editing PO: <strong>${escapeXml(r.poNo)}</strong> — Modify fields and save.</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
+          <input type="text" id="po_edit_poNo" value="${escapeXml(r.poNo||'')}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Client</label>
+          <select id="po_edit_client" onchange="updatePoEditPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            ${clientOptions}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Shipment Date</label>
+          <input type="date" id="po_edit_shipDate" value="${r.shipDate||''}" onchange="updatePoEditPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Payment Due Date <span style="font-size:10px;color:var(--text-muted)">(auto-calculated)</span></label>
+          <input type="date" id="po_edit_payDate" value="${r.paymentDate||''}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD)</label>
+          <input type="number" id="po_edit_amount" value="${(r.amount||0).toFixed(2)}" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Notes</label>
+          <input type="text" id="po_edit_notes" value="${escapeXml(r.notes||'')}" placeholder="Optional notes" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-success" onclick="savePoForecastEdit(${idx})">&#128190; Save Changes</button>
+      </div>
+    </div>
+  `);
+}
+
+function updatePoEditPaymentDate() {
+  const clientKey = document.getElementById('po_edit_client')?.value || '';
+  const shipDate = document.getElementById('po_edit_shipDate')?.value || '';
+  if (!shipDate) return;
+  const info = customerInfo[clientKey] || DEFAULT_CUSTOMER_INFO[clientKey] || {};
+  const payDays = info.paymentDays || 45;
+  const d = new Date(shipDate);
+  d.setDate(d.getDate() + payDays);
+  const payDate = d.toISOString().split('T')[0];
+  const payDateEl = document.getElementById('po_edit_payDate');
+  if (payDateEl) payDateEl.value = payDate;
+}
+
+function savePoForecastEdit(idx) {
+  const poNo = document.getElementById('po_edit_poNo')?.value?.trim() || '';
+  const clientKey = document.getElementById('po_edit_client')?.value || '';
+  const shipDate = document.getElementById('po_edit_shipDate')?.value || '';
+  const payDate = document.getElementById('po_edit_payDate')?.value || '';
+  const amount = parseFloat(document.getElementById('po_edit_amount')?.value) || 0;
+  const notes = document.getElementById('po_edit_notes')?.value?.trim() || '';
+
+  if (!shipDate) { toast('Please enter a Shipment Date', 'error'); return; }
+  if (!clientKey) { toast('Please select a Client', 'error'); return; }
+
+  const cfg = CLIENT_CONFIGS[clientKey];
+  const info = customerInfo[clientKey] || DEFAULT_CUSTOMER_INFO[clientKey] || {};
+  const payDays = info.paymentDays || 45;
+  const clientLabel = cfg?.label || clientKey;
+
+  let paymentDate = payDate;
+  if (!paymentDate && shipDate) {
+    const d = new Date(shipDate);
+    d.setDate(d.getDate() + payDays);
+    paymentDate = d.toISOString().split('T')[0];
+  }
+
+  const rows = loadPoForecast();
+  if (idx < 0 || idx >= rows.length) { toast('Record not found', 'error'); return; }
+
+  const updatedRow = {
+    ...rows[idx],
+    poNo: poNo || rows[idx].poNo,
+    client: clientLabel,
+    clientKey,
+    shipDate,
+    paymentDate,
+    payDays,
+    amount,
+    notes,
+    lastEdited: new Date().toISOString()
+  };
+  rows[idx] = updatedRow;
+  savePoForecast(rows);
+
+  // Update Order Status records linked to this PO
+  const linesData = {
+    poNo: updatedRow.poNo,
+    shipDate: updatedRow.shipDate,
+    notes: updatedRow.notes,
+    lines: []
+  };
+  createOrderStatusFromPo(linesData, clientKey);
+
+  closeModal();
+  renderPoTable(rows);
+  renderCashflow();
+  toast(`✓ PO ${updatedRow.poNo} updated (Payment due: ${paymentDate})`, 'success');
+}
+
+// ── Convert PO Forecast to Invoice ───────────────────────────
+function convertPoToInvoice(idx) {
+  const rows = loadPoForecast();
+  if (idx < 0 || idx >= rows.length) return;
+  const r = rows[idx];
+
+  if (!r.clientKey) {
+    toast('Cannot convert: PO has no client assigned', 'error');
+    return;
+  }
+
+  // Switch to Create Invoice tab
+  switchTab('create');
+
+  // Reset form state
+  state.editingHistoryIdx = null;
+
+  // Select the client (this triggers buildForm)
+  selectClient(r.clientKey);
+
+  // After buildForm renders, pre-fill the header fields
+  const _fillPoFields = function() {
+    const shipmentDateEl = document.getElementById('shipmentDate');
+    const linkedPOEl = document.getElementById('invoiceLinkedPO');
+    const headerPOEl = document.getElementById('headerPO');
+
+    if (shipmentDateEl) shipmentDateEl.value = r.shipDate || '';
+
+    // Set the linked PO
+    if (linkedPOEl) {
+      if (linkedPOEl.tagName === 'SELECT') {
+        const opts = Array.from(linkedPOEl.options);
+        const match = opts.find(o => o.value === r.poNo);
+        if (match) {
+          linkedPOEl.value = r.poNo;
+        } else if (r.poNo) {
+          const opt = document.createElement('option');
+          opt.value = r.poNo;
+          opt.textContent = r.poNo;
+          linkedPOEl.appendChild(opt);
+          linkedPOEl.value = r.poNo;
+        }
+      } else {
+        linkedPOEl.value = r.poNo || '';
+      }
+    }
+    if (headerPOEl) headerPOEl.value = r.poNo || '';
+
+    // Pre-fill line items: first try PO stored lines, then Order Status
+    const poLines = r.lines || [];
+    const clientOrders = getClientOrders(r.clientKey);
+    const poOrders = clientOrders.filter(o => o.poNo === r.poNo && o.itemCode);
+
+    if (poLines.length > 0) {
+      // Use lines stored in PO Forecast (from PDF import)
+      state.rows = poLines.map(l => ({
+        itemCode: l.itemCode || '',
+        flex: l.flex || '',
+        nfItem: l.nfSpec || l.description || '',
+        qty: l.qty ? String(l.qty) : '',
+        unitPrice: l.unitPrice ? String(l.unitPrice) : '',
+        amount: l.amount ? String(l.amount) : ((l.qty && l.unitPrice) ? String(Math.round(l.qty * l.unitPrice * 100) / 100) : '')
+      }));
+      renderRows();
+    } else if (poOrders.length > 0) {
+      // Fallback: use Order Status records
+      state.rows = poOrders.map(o => ({
+        itemCode: o.itemCode || '',
+        flex: o.flex || '',
+        nfItem: o.nfSpec || '',
+        qty: o.qty ? String(o.qty) : '',
+        unitPrice: o.unitPrice ? String(o.unitPrice) : '',
+        amount: (o.qty && o.unitPrice) ? String(Math.round(o.qty * o.unitPrice * 100) / 100) : ''
+      }));
+      renderRows();
+    }
+
+    _updateStep5UI();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    toast(`\u2192 PO ${r.poNo} loaded into Invoice form. Please fill in Invoice No. and Date.`, 'success');
+  };
+
+  // Use pending fill mechanism (same as loadHistoryEntryToForm)
+  state._pendingHistoryFill = _fillPoFields;
+  setTimeout(_fillPoFields, 200);
 }
 
 // ============================================================
@@ -6178,6 +6393,7 @@ function confirmPoImport() {
     paymentDate = d.toISOString().split('T')[0];
   }
 
+  const parsedLines = window._lastParsedPoLines || [];
   const newRow = {
     poNo: poNo || 'PO-' + Date.now(),
     client: clientLabel,
@@ -6188,7 +6404,8 @@ function confirmPoImport() {
     amount,
     notes,
     source: 'pdf',
-    importedAt: new Date().toISOString()
+    importedAt: new Date().toISOString(),
+    lines: parsedLines  // Store line items for future Invoice conversion
   };
 
   // Add to PO forecast (avoid duplicate by poNo+clientKey)
@@ -6207,7 +6424,7 @@ function confirmPoImport() {
     poNo: newRow.poNo,
     shipDate: newRow.shipDate,
     notes: newRow.notes,
-    lines: window._lastParsedPoLines || []
+    lines: parsedLines
   };
   const addedOrders = createOrderStatusFromPo(linesData, clientKey);
 
