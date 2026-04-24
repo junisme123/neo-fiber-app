@@ -6237,8 +6237,8 @@ function parsePoPdfLocal(text, filename) {
     }
   }
 
-  // ── 5. Line Items: scan by priceDB Item Codes ────────────────────────────────────────────────────────────
-  const lineItems = _scanPdfByItemCodes(text, clientKey);
+  // ── 5. Line Items: parse table structure directly ────────────────────────────────────────────────────────────
+  const lineItems = _parsePoTableLines(text);
 
   // If totalAmount not found, sum line items
   if (totalAmount === 0 && lineItems.length > 0) {
@@ -6264,107 +6264,139 @@ function parsePoPdfLocal(text, filename) {
   };
 }
 
-// ── Scan PDF text using priceDB Item Codes as anchors ────────────────────────────────────────────────────────────
-function _scanPdfByItemCodes(text, clientKey) {
-  // Collect all item codes from priceDB for the detected client
-  // If no client detected yet, try all clients
-  const allLines = text.split('\n').map(l => l.trim()).filter(Boolean);
+// ── Parse PO table lines directly from PDF text ────────────────────────────────────────────────────────────
+// Strategy: find the table header row, then extract each data row below it.
+// The table header contains keywords like "Item", "Quantity", "Price", "Amount".
+// Each data row has: item name (text), optional comments, units (EA/PC/SET etc),
+// quantity (integer), unit price (decimal), line amount (decimal).
+function _parsePoTableLines(text) {
+  const rawLines = text.split('\n');
   const results = [];
-  const seenCodes = new Set();
 
-  // Build list of (itemCode, dbItem) pairs to scan for
-  let scanItems = [];
-  const addFromDb = (key) => {
-    const db = priceDB[key];
-    if (!db || !db.items) return;
-    db.items.forEach(item => {
-      const ic = (item.customerCode || item.itemCode || '').trim();
-      if (ic.length >= 2) scanItems.push({ code: ic, item, clientKey: key });
-    });
-  };
-
-  if (clientKey) {
-    addFromDb(clientKey);
-  } else {
-    // No client detected — scan all clients
-    Object.keys(priceDB).forEach(k => addFromDb(k));
+  // Step 1: Find the header row index
+  // Look for a line containing at least 3 of: Item, Quantity, Price, Amount, Units
+  let headerIdx = -1;
+  let headerLine = '';
+  for (let i = 0; i < rawLines.length; i++) {
+    const l = rawLines[i];
+    const lu = l.toUpperCase();
+    const hits = ['ITEM', 'QUANTITY', 'QTY', 'PRICE', 'AMOUNT', 'UNIT'].filter(k => lu.includes(k));
+    if (hits.length >= 3) {
+      headerIdx = i;
+      headerLine = l;
+      break;
+    }
   }
 
-  // Sort by code length descending (match longer codes first to avoid partial matches)
-  scanItems.sort((a,b) => b.code.length - a.code.length);
+  if (headerIdx < 0) return []; // No table found
 
-  // For each item code, search in the PDF text
-  for (const { code, item } of scanItems) {
-    if (seenCodes.has(code.toUpperCase())) continue;
-    // Use word-boundary-aware search (allow surrounding spaces, tabs, newlines, or punctuation)
-    const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`(?:^|[\\s,;:|\/\\(])${escapedCode}(?:[\\s,;:|\/\\)]|$)`, 'im');
-    if (!re.test(text)) continue;
+  // Step 2: Determine approximate column positions from the header
+  // Use character positions of each header keyword
+  const headerUpper = headerLine.toUpperCase();
+  const colPos = {};
+  ['ITEM', 'COMMENTS', 'UNITS', 'UNIT', 'QUANTITY', 'QTY', 'PRICE', 'AMOUNT'].forEach(k => {
+    const idx = headerUpper.indexOf(k);
+    if (idx >= 0) colPos[k] = idx;
+  });
+  // Normalize: prefer QUANTITY over QTY, UNITS over UNIT
+  const qtyCol = colPos['QUANTITY'] ?? colPos['QTY'] ?? -1;
+  const priceCol = colPos['PRICE'] ?? -1;
+  const amtCol = colPos['AMOUNT'] ?? -1;
+  const unitsCol = colPos['UNITS'] ?? colPos['UNIT'] ?? -1;
+  const commentsCol = colPos['COMMENTS'] ?? -1;
+  const itemCol = colPos['ITEM'] ?? 0;
 
-    seenCodes.add(code.toUpperCase());
+  // Step 3: Parse data rows below the header
+  // Stop when we hit a line with "Total", "Subtotal", or an empty section
+  let consecutiveEmpty = 0;
+  for (let i = headerIdx + 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const trimmed = line.trim();
 
-    // Found the item code — now try to extract Qty and Unit Price from the same/nearby line
-    let qty = 0;
-    let unitPrice = item.price || 0;
-    let amount = 0;
-    let description = item.nfItem || item.flex || '';
+    // Stop conditions
+    if (/^\s*$/.test(line)) { consecutiveEmpty++; if (consecutiveEmpty > 2) break; continue; }
+    consecutiveEmpty = 0;
+    if (/\b(grand\s*total|sub\s*total|total\s*amount|^total)\b/i.test(trimmed)) break;
+    if (/\b(total)\b/i.test(trimmed) && /\$?[\d,]+\.\d{2}/.test(trimmed)) break;
 
-    // Find the line(s) containing this code
-    const matchingLines = allLines.filter(l => {
-      const escapedCode2 = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`(?:^|[\\s,;:|\/\\(])${escapedCode2}(?:[\\s,;:|\/\\)]|$)`, 'i').test(l);
-    });
+    // Try to extract numbers from the line (qty, price, amount)
+    // Numbers are right-aligned in columns, so use position-based extraction when possible
+    const numMatches = [...trimmed.matchAll(/[\$]?([\d,]+\.?\d*)/g)]
+      .map(m => ({ val: parseFloat(m[1].replace(/,/g,'')), raw: m[1] }))
+      .filter(m => m.val > 0);
 
-    for (const line of matchingLines) {
-      // Extract all numbers from the line
-      const nums = [...line.matchAll(/[\$]?([\d,]+\.?\d*)/g)]
-        .map(m => parseFloat(m[1].replace(/,/g,'')))
-        .filter(n => n > 0 && n < 100000);
+    if (numMatches.length < 2) continue; // Need at least qty + price or price + amount
 
-      if (nums.length === 0) continue;
-
-      // Heuristic: find qty (small integer) and price (decimal or larger)
-      // Qty is typically a small whole number (1-9999)
-      // Unit price is typically a decimal
-      const qtyCandidate = nums.find(n => Number.isInteger(n) && n >= 1 && n <= 9999);
-      const priceCandidate = nums.find(n => n !== qtyCandidate && n >= 0.01);
-
-      if (qtyCandidate) qty = qtyCandidate;
-      if (priceCandidate && priceCandidate !== qtyCandidate) {
-        // If price is much larger than item.price, it might be the line total
-        if (unitPrice > 0 && priceCandidate > unitPrice * 1.5 && qtyCandidate) {
-          // priceCandidate is likely the line total
-          amount = priceCandidate;
-        } else {
-          unitPrice = priceCandidate;
-        }
-      }
-
-      // If we have 3+ numbers: likely qty, unitPrice, amount
-      if (nums.length >= 3) {
-        // Find the smallest integer as qty
-        const sortedInts = nums.filter(n => Number.isInteger(n) && n >= 1 && n <= 9999).sort((a,b) => a-b);
-        if (sortedInts.length > 0) qty = sortedInts[0];
-        // Largest number is likely amount
-        const sortedAll = [...nums].sort((a,b) => b-a);
-        amount = sortedAll[0];
-        // Middle value is unit price
-        if (sortedAll.length >= 2 && sortedAll[1] !== qty) unitPrice = sortedAll[1];
-      }
-      break; // use first matching line
+    // Extract item name: text before the first number cluster
+    // Use position: everything from itemCol to before the first number
+    let itemName = '';
+    const firstNumIdx = trimmed.search(/\d/);
+    if (firstNumIdx > 0) {
+      itemName = trimmed.substring(0, firstNumIdx).trim();
+      // Remove trailing unit abbreviations (EA, PC, SET, PCS, etc.)
+      itemName = itemName.replace(/\s+(EA|PC|PCS|SET|SETS|EACH|UNIT|UNITS|ROLL|ROLLS|M|MM|CM|KG|LB|FT|YD)\s*$/i, '').trim();
+    } else {
+      continue; // No item name found
     }
 
-    // Calculate amount if not found
-    if (!amount && qty && unitPrice) amount = Math.round(qty * unitPrice * 100) / 100;
-    // If still no qty, default to 0 (user will fill in)
+    // Skip if item name is too short or looks like a header/footer
+    if (itemName.length < 2) continue;
+    if (/^(item|description|product|code|model|sku|#|no\.|ref)$/i.test(itemName)) continue;
+
+    // Extract unit (EA, PC, SET etc.) — appears between item name and numbers
+    let units = '';
+    const unitMatch = trimmed.match(/\b(EA|PC|PCS|SET|SETS|EACH|UNIT|UNITS|ROLL|ROLLS|M|MM|CM|KG|LB|FT|YD)\b/i);
+    if (unitMatch) units = unitMatch[1].toUpperCase();
+
+    // Extract qty, unitPrice, amount from the numbers found
+    // Strategy: last number is amount, second-to-last is price, third-to-last is qty
+    let qty = 0, unitPrice = 0, amount = 0;
+    if (numMatches.length >= 3) {
+      // 3+ numbers: qty, price, amount (in order)
+      // Find the integer-like number as qty (smallest, whole number)
+      const intNums = numMatches.filter(m => Number.isInteger(m.val) && m.val >= 1 && m.val <= 99999);
+      const decNums = numMatches.filter(m => !Number.isInteger(m.val) || m.val > 9999);
+      if (intNums.length > 0) qty = intNums[0].val;
+      if (decNums.length >= 2) {
+        // Sort decimals: smaller = unit price, larger = amount
+        const sorted = decNums.sort((a,b) => a.val - b.val);
+        unitPrice = sorted[0].val;
+        amount = sorted[sorted.length-1].val;
+      } else if (decNums.length === 1) {
+        // Only one decimal: could be price or amount
+        if (qty > 0) {
+          // Check if it's the amount (qty * something = this)
+          unitPrice = decNums[0].val / qty;
+          amount = decNums[0].val;
+        } else {
+          unitPrice = decNums[0].val;
+        }
+      }
+    } else if (numMatches.length === 2) {
+      // 2 numbers: price + amount, or qty + amount
+      const [n1, n2] = numMatches;
+      if (Number.isInteger(n1.val) && n1.val >= 1 && n1.val <= 9999) {
+        qty = n1.val;
+        amount = n2.val;
+        unitPrice = qty > 0 ? Math.round(amount / qty * 100) / 100 : 0;
+      } else {
+        unitPrice = n1.val;
+        amount = n2.val;
+      }
+    }
+
+    // Recalculate amount if inconsistent
+    if (qty > 0 && unitPrice > 0 && Math.abs(amount - qty * unitPrice) > 0.02) {
+      amount = Math.round(qty * unitPrice * 100) / 100;
+    }
+
     results.push({
-      itemCode: code,
-      description: description,
+      itemCode: itemName,   // The raw item name from the PO (e.g. "RAIJIN 2.0 IR 55")
+      description: '',      // Empty — user can fill in or it maps to NF Spec
+      units: units,
       qty: qty,
       unitPrice: unitPrice,
-      amount: amount,
-      flex: item.flex || '',
-      nfSpec: item.nfItem || ''
+      amount: amount
     });
   }
 
@@ -6376,44 +6408,31 @@ async function parsePoPdfWithAI(pdfText, filename, apiKey) {
   const ccList = loadCustomClients().map(c => `custom_${c.code} (${c.name})`).join(', ');
   const clientList = Object.entries(CLIENT_CONFIGS).map(([k,v]) => `${k} (${v.label})`).join(', ') + (ccList ? ', ' + ccList : '');
 
-  // Build known item codes list from priceDB for AI reference
-  let knownItemCodes = [];
-  Object.entries(priceDB).forEach(([clientKey, db]) => {
-    if (db && db.items) {
-      db.items.forEach(item => {
-        const ic = item.customerCode || item.itemCode || '';
-        if (ic) knownItemCodes.push(`${ic} (${clientKey}, price: ${item.price||0})`);
-      });
-    }
-  });
-  const itemCodeList = knownItemCodes.slice(0, 200).join(', ');
-
   const prompt = `You are a purchase order data extraction assistant for Neo-Fiber Industrial.
 
-Your task: Scan the PO document and identify which of the KNOWN ITEM CODES appear in it. Use the item codes as your primary recognition targets, not the raw text structure.
+Your task: Extract ALL line items from the PO table exactly as they appear. Do NOT interpret, merge, or split rows. Each row in the PO table becomes exactly one entry in the lines array.
 
 Known clients: ${clientList}
 
-KNOWN ITEM CODES (these are the codes to look for in the PO):
-${itemCodeList || '(no item codes in database yet)'}
+The PO table typically has columns: Item, Comments, Units, Quantity, Price, Amount.
+Extract each row as-is, preserving the exact item name from the "Item" column.
 
-For each known item code found in the PO, extract:
-- itemCode: the exact known item code that was found
-- description: any product description text near that item code in the PO
-- qty: quantity ordered for that item code (integer)
-- unitPrice: unit price in USD for that item code
-- amount: line total (qty * unitPrice)
-
-Also extract the following PO-level fields:
+Extract:
 - poNo: PO number
 - clientKey: one of the known client keys (match by company name/address in the PO)
 - clientLabel: the customer company name as written in the PO
-- shipDate: shipment/delivery date in YYYY-MM-DD format
+- shipDate: required/ship date in YYYY-MM-DD format
 - currency: currency code (default USD)
-- totalAmount: sum of all line amounts
-- notes: any special shipping instructions or notes
+- totalAmount: the total amount shown in the PO
+- notes: any special instructions or notes
+- lines: array of line items, each with:
+  - itemCode: exact item name/code from the Item column (e.g. "RAIJIN 2.0 IR 55", "BDZ Irons - 55A")
+  - units: unit of measure (e.g. EA, PC, SET)
+  - qty: quantity (integer)
+  - unitPrice: unit price (decimal)
+  - amount: line total (decimal)
 
-Return a JSON object:
+Return JSON:
 {
   "poNo": "string",
   "clientKey": "string",
@@ -6423,11 +6442,9 @@ Return a JSON object:
   "totalAmount": number,
   "notes": "string",
   "lines": [
-    {"itemCode": "string", "description": "string", "qty": number, "unitPrice": number, "amount": number}
+    {"itemCode": "string", "units": "string", "qty": number, "unitPrice": number, "amount": number}
   ]
 }
-
-IMPORTANT: Only include item codes that actually appear in the PO text. If a known item code is not in the PO, do not include it. If qty or price cannot be determined, use 0.
 
 PO Document Text:
 ${pdfText.slice(0, 8000)}`;
@@ -6524,52 +6541,26 @@ function showPoConfirmDialog(parsed, filename) {
   const clientOptions = buildClientOptions(clientKey);
 
   // Build confirm groups from parsed lines
-  // Since _scanPdfByItemCodes already matched by Item Code, lines are already mapped.
-  // Each line becomes a single editable row (no secondary matching needed).
+  // _parsePoTableLines returns raw table rows: { itemCode (item name), units, qty, unitPrice, amount }
+  // Each line becomes one editable row — no splitting, no priceDB matching
   const rawLines = parsed.lines || [];
   window._poConfirmGroups = rawLines.map(l => {
-    // If line already has flex/nfSpec (from _scanPdfByItemCodes), use directly
-    // Otherwise try to look up from priceDB
-    let flex = l.flex || '';
-    let nfSpec = l.nfSpec || '';
-    let unitPrice = l.unitPrice || 0;
-    let autoMatched = l.flex || l.nfSpec ? 100 : 0;
-
-    if (!flex && !nfSpec) {
-      // Fallback: try to find in priceDB
-      const db = priceDB[clientKey];
-      if (db && db.items) {
-        const found = db.items.find(item =>
-          (item.customerCode || item.itemCode || '').toLowerCase() === (l.itemCode || '').toLowerCase()
-        );
-        if (found) {
-          flex = found.flex || '';
-          nfSpec = found.nfItem || '';
-          if (!unitPrice) unitPrice = found.price || 0;
-          autoMatched = 100;
-        }
-      }
-    }
-
-    const qty = l.qty || 0;
-    const amount = l.amount || Math.round(qty * unitPrice * 100) / 100;
     return {
-      _raw: null, // No separate "raw" display — the line IS the recognized result
+      _raw: null,
       rows: [{
         itemCode: l.itemCode || '',
-        description: l.description || nfSpec || '',
-        qty,
-        unitPrice,
-        amount,
-        flex,
-        nfSpec,
-        _autoMatched: autoMatched
+        description: l.description || '',
+        units: l.units || '',
+        qty: l.qty || 0,
+        unitPrice: l.unitPrice || 0,
+        amount: l.amount || 0,
+        _autoMatched: 0
       }]
     };
   });
   // If no lines found, start with one empty row
   if (window._poConfirmGroups.length === 0) {
-    window._poConfirmGroups = [{ _raw: null, rows: [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0, flex:'', nfSpec:'' }] }];
+    window._poConfirmGroups = [{ _raw: null, rows: [{ itemCode:'', description:'', units:'', qty:0, unitPrice:0, amount:0 }] }];
   }
 
   const totalAmt = parsed.totalAmount || rawLines.reduce((s,l) => s+(l.amount||0), 0);
@@ -6583,7 +6574,7 @@ function showPoConfirmDialog(parsed, filename) {
   showModal(`
     <div style="max-width:960px">
       <h3 style="margin-bottom:4px;color:var(--primary)">&#128196; PO Recognition Result</h3>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} &mdash; Review auto-matched items. You can split rows, change mappings, or add rows manually.</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">File: ${escapeXml(filename)} &mdash; Review recognized line items. Edit values as needed, then confirm to save.</div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
         <div>
@@ -6617,7 +6608,7 @@ function showPoConfirmDialog(parsed, filename) {
       <!-- Item Mapping Section -->
       <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <div style="background:#f0f4f8;padding:8px 12px;display:flex;align-items:center;justify-content:space-between">
-          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128279; Item Mapping <span id="po_confirm_groupCount" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <div style="font-size:12px;font-weight:600;color:var(--primary)">&#128221; Recognized Line Items <span id="po_confirm_groupCount" style="font-weight:400;color:var(--text-muted)"></span></div>
           <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poConfirmAddGroup()">+ Add Row</button>
         </div>
         <div id="po_confirm_groupsContainer" style="max-height:400px;overflow-y:auto"></div>
@@ -6640,7 +6631,7 @@ function _renderPoConfirmGroups() {
   const groups = window._poConfirmGroups || [];
   const clientKey = document.getElementById('po_confirm_client')?.value || '';
   const totalRows = groups.reduce((s,g) => s + g.rows.length, 0);
-  if (countEl) countEl.textContent = `(${totalRows} item${totalRows!==1?'s':''} recognized from priceDB)`;
+  if (countEl) countEl.textContent = `(${totalRows} item${totalRows!==1?'s':''} recognized)`;
 
   // Build datalist for item code autocomplete
   const datalistId = 'po_confirm_itemlist';
@@ -6651,32 +6642,28 @@ function _renderPoConfirmGroups() {
     const rawHtml = '';
 
     const rowsHtml = group.rows.map((row, ri) => {
-      const matchBadge = row._autoMatched > 0
-        ? `<span style="font-size:9px;background:${row._autoMatched>=60?'#d1fae5':'#fef3c7'};color:${row._autoMatched>=60?'#065f46':'#92400e'};padding:1px 5px;border-radius:3px;margin-left:4px">${row._autoMatched>=60?'&#10003; matched':'~ partial'}</span>`
-        : '';
       return `
-        <div style="display:grid;grid-template-columns:180px 1fr 65px 85px 85px 28px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${ri%2===0?'white':'#fafafa'}">
+        <div style="display:grid;grid-template-columns:1fr 60px 65px 90px 90px 28px;gap:4px;padding:6px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${ri%2===0?'white':'#fafafa'}">
           <div>
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Item Code${matchBadge}</div>
-            <input type="text" list="${datalistId}" value="${escapeXml(row.itemCode||'')}" 
-              oninput="_poGroupRowChange(${gi},${ri},'itemCode',this.value)" 
-              onchange="_poGroupRowSelectItem(${gi},${ri},this.value)"
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Item</div>
+            <input type="text" value="${escapeXml(row.itemCode||'')}" 
+              oninput="_poGroupRowChange(${gi},${ri},'itemCode',this.value)"
               style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
           </div>
           <div>
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Description / NF Spec</div>
-            <input type="text" value="${escapeXml(row.description||row.nfSpec||'')}" 
-              oninput="_poGroupRowChange(${gi},${ri},'description',this.value)"
-              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Units</div>
+            <input type="text" value="${escapeXml(row.units||'')}" 
+              oninput="_poGroupRowChange(${gi},${ri},'units',this.value)"
+              style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:center">
           </div>
           <div>
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Qty</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Quantity</div>
             <input type="number" value="${row.qty||''}" 
               oninput="_poGroupRowChange(${gi},${ri},'qty',this.value);_poGroupRowRecalc(${gi},${ri})"
               style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
           </div>
           <div>
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Unit Price</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:2px">Price</div>
             <input type="number" value="${row.unitPrice||''}" step="0.01"
               oninput="_poGroupRowChange(${gi},${ri},'unitPrice',this.value);_poGroupRowRecalc(${gi},${ri})"
               style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
@@ -6687,11 +6674,8 @@ function _renderPoConfirmGroups() {
               oninput="_poGroupRowChange(${gi},${ri},'amount',this.value);_poConfirmSyncTotal()"
               style="width:100%;padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
           </div>
-          <div style="display:flex;flex-direction:column;gap:2px;align-items:center">
-            ${group.rows.length === 1
-              ? `<button onclick="_poConfirmRemoveGroup(${gi})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:13px;padding:0" title="Remove this item">&times;</button>`
-              : `<button onclick="_poGroupRemoveRow(${gi},${ri})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:13px;padding:0" title="Remove row">&times;</button>`
-            }
+          <div style="display:flex;align-items:center;justify-content:center;padding-top:14px">
+            <button onclick="_poConfirmRemoveGroup(${gi})" style="background:none;border:none;color:#e53e3e;cursor:pointer;font-size:14px;padding:0" title="Remove this row">&times;</button>
           </div>
         </div>`;
     }).join('');
@@ -6762,7 +6746,7 @@ function _poConfirmRemoveGroup(gi) {
 
 function _poConfirmAddGroup() {
   if (!window._poConfirmGroups) window._poConfirmGroups = [];
-  window._poConfirmGroups.push({ _raw: null, rows: [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0, flex:'', nfSpec:'' }] });
+  window._poConfirmGroups.push({ _raw: null, rows: [{ itemCode:'', units:'EA', qty:0, unitPrice:0, amount:0 }] });
   _renderPoConfirmGroups();
 }
 
@@ -6811,27 +6795,21 @@ function confirmPoImport() {
     paymentDate = d.toISOString().split('T')[0];
   }
 
-  // Collect all mapped rows from _poConfirmGroups (new design) or fallback to _poConfirmLines
+  // Collect all rows from _poConfirmGroups
   let editedLines = [];
-  if (window._poConfirmGroups && window._poConfirmGroups.length > 0) {
-    window._poConfirmGroups.forEach(group => {
-      group.rows.forEach(row => {
-        if (row.itemCode || row.description || row.qty) {
-          editedLines.push({
-            itemCode: row.itemCode || '',
-            description: row.description || row.nfSpec || '',
-            qty: parseFloat(row.qty) || 0,
-            unitPrice: parseFloat(row.unitPrice) || 0,
-            amount: parseFloat(row.amount) || 0,
-            flex: row.flex || '',
-            nfSpec: row.nfSpec || ''
-          });
-        }
-      });
+  (window._poConfirmGroups || []).forEach(group => {
+    group.rows.forEach(row => {
+      if (row.itemCode || row.qty) {
+        editedLines.push({
+          itemCode: row.itemCode || '',
+          units: row.units || '',
+          qty: parseFloat(row.qty) || 0,
+          unitPrice: parseFloat(row.unitPrice) || 0,
+          amount: parseFloat(row.amount) || 0
+        });
+      }
     });
-  } else {
-    editedLines = (window._poConfirmLines || window._lastParsedPoLines || []).filter(l => l.itemCode || l.description || l.qty);
-  }
+  });
   const newRow = {
     poNo: poNo || 'PO-' + Date.now(),
     client: clientLabel,
