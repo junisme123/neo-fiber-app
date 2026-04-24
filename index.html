@@ -6070,42 +6070,41 @@ async function handlePoPdfUpload(event) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
 
-    // Extract text from PDF (preserve column structure using x-coordinates)
+    // Extract text from PDF with x/y coordinates for each text item
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let allPageItems = []; // [{x, y, str, pageWidth}]
     let fullText = '';
-    let allItems = []; // store all text items with positions
     for (let i = 1; i <= Math.min(pdf.numPages, 10); i++) {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: 1 });
       const pageWidth = viewport.width;
       const content = await page.getTextContent();
-      // Group items by Y position (same line), store {x, str} pairs
-      const lineMap = {};
+      // Collect items with coordinates
+      const pageItems = [];
       content.items.forEach(item => {
         if (!item.str.trim()) return;
-        const y = Math.round(item.transform[5]);
-        const x = item.transform[4];
-        if (!lineMap[y]) lineMap[y] = [];
-        lineMap[y].push({ x, str: item.str });
+        pageItems.push({ x: item.transform[4], y: item.transform[5], str: item.str, pageWidth });
       });
-      // Sort by Y descending (top to bottom)
-      // For each line, sort items by x, then build a fixed-width string
-      // Map x coordinate (0..pageWidth) to character position (0..120)
+      allPageItems = allPageItems.concat(pageItems);
+      // Also build a layout-preserving text string (120-char wide)
+      const lineMap = {};
+      pageItems.forEach(({ x, y, str }) => {
+        const yr = Math.round(y);
+        if (!lineMap[yr]) lineMap[yr] = [];
+        lineMap[yr].push({ x, str });
+      });
       const charWidth = pageWidth / 120;
-      const lines = Object.keys(lineMap).sort((a,b) => b-a).map(y => {
-        const items = lineMap[y].sort((a,b) => a.x - b.x);
-        // Build a 120-char wide string with items placed at their column positions
+      const lines = Object.keys(lineMap).sort((a,b) => b-a).map(yr => {
+        const rowItems = lineMap[yr].sort((a,b) => a.x - b.x);
         let row = ' '.repeat(120);
-        items.forEach(({ x, str }) => {
-          const col = Math.max(0, Math.min(119, Math.round(x / charWidth)));
-          // Insert str at col position
+        rowItems.forEach(({ x, str }) => {
+          const col = Math.max(0, Math.min(119 - str.length, Math.round(x / charWidth)));
           row = row.slice(0, col) + str + row.slice(col + str.length);
         });
         return row.trimEnd();
       });
       fullText += lines.join('\n') + '\n';
-      allItems = allItems.concat(content.items);
     }
 
     if (!fullText.trim()) {
@@ -6114,25 +6113,24 @@ async function handlePoPdfUpload(event) {
       return;
     }
 
-    statusEl.textContent = '🔍 Analyzing PO...';
+    statusEl.textContent = '\uD83D\uDD0D Analyzing PO...';
 
-    // Use local rule engine to parse PO
-    const parsed = parsePoPdfLocal(fullText, file.name);
-
-    // If AI key is available, optionally use AI for better accuracy
+    // If AI key is available, ALWAYS use AI first (handles any PO format)
     const apiKey = loadApiKey();
-    if (apiKey && parsed._confidence < 0.6) {
-      statusEl.textContent = '🤖 Using AI for better accuracy...';
+    if (apiKey) {
+      statusEl.textContent = '\uD83E\uDD16 Using AI recognition...';
       try {
         const aiParsed = await parsePoPdfWithAI(fullText, file.name, apiKey);
-        if (aiParsed) {
+        if (aiParsed && (aiParsed.lines || []).length > 0) {
           statusEl.textContent = '';
           showPoConfirmDialog(aiParsed, file.name);
           return;
         }
-      } catch(e) { /* fall through to local result */ }
+      } catch(e) { console.warn('AI parse failed, falling back to local:', e); }
     }
 
+    // Fallback: local rule engine using x-coordinate based table extraction
+    const parsed = parsePoPdfLocal(fullText, file.name, allPageItems);
     statusEl.textContent = '';
     showPoConfirmDialog(parsed, file.name);
 
@@ -6146,7 +6144,7 @@ async function handlePoPdfUpload(event) {
 // ============================================================
 // LOCAL PO RULE ENGINE (No API Key Required)
 // ============================================================
-function parsePoPdfLocal(text, filename) {
+function parsePoPdfLocal(text, filename, allPageItems) {
   const textLower = text.toLowerCase();
   let confidence = 0;
 
@@ -6243,8 +6241,16 @@ function parsePoPdfLocal(text, filename) {
     }
   }
 
-  // ── 5. Line Items: column-position based extraction ────────
-  const lineItems = _parsePoLinesByColumnPosition(text);
+  // ── 5. Line Items: use x-coordinate items if available, else layout text ────────
+  let lineItems = [];
+  if (allPageItems && allPageItems.length > 0) {
+    // Use raw x/y coordinate items for most accurate column detection
+    lineItems = _parsePoLinesByXCoords(allPageItems);
+  }
+  if (lineItems.length === 0) {
+    // Fallback: use layout-preserving text
+    lineItems = _parsePoLinesByColumnPosition(text);
+  }
 
   // If totalAmount not found, sum line items
   if (totalAmount === 0 && lineItems.length > 0) {
@@ -6270,14 +6276,120 @@ function parsePoPdfLocal(text, filename) {
   };
 }
 
-// ── Parse PO line items by column position (pdftotext -layout output) ────────────────────────────────────────────────────────────
-// Strategy:
-//   1. Find the header row containing "Item" and "Amount" (and optionally Quantity/Price)
-//   2. Record the character-position of each column header
-//   3. For each data row below the header, slice by those positions
-//   4. Item spans from col 0 to the start of the Units/Quantity column
-//      (merging Item + Comments columns so the full name is preserved)
-//   5. Stop at a line containing "Total" or a blank line after data rows
+
+// ── Parse PO line items using raw x/y coordinates from pdf.js ──────────────────────────────────────────────────────────────────
+// Works with ANY PO format: dynamically detects column positions from header row x-coordinates
+// No hardcoded column positions - adapts to each PO layout automatically
+function _parsePoLinesByXCoords(allItems) {
+  if (!allItems || allItems.length === 0) return [];
+
+  // Step 1: Group by y-coordinate (round to nearest 2px to handle slight misalignment)
+  const rowMap = {};
+  allItems.forEach(({ x, y, str }) => {
+    const yr = Math.round(y / 2) * 2;
+    if (!rowMap[yr]) rowMap[yr] = [];
+    rowMap[yr].push({ x, str });
+  });
+
+  // Sort rows top-to-bottom (pdf.js y=0 is bottom, so sort descending)
+  const sortedYs = Object.keys(rowMap).map(Number).sort((a, b) => b - a);
+
+  // Step 2: Find the header row containing table column keywords
+  const COL_KEYWORDS = {
+    item:   ['item', 'description', 'product', 'part', 'goods', 'sku'],
+    qty:    ['quantity', 'qty', 'pcs', 'pieces'],
+    price:  ['price', 'unit price', 'unit cost', 'rate', 'cost'],
+    amount: ['amount', 'total', 'ext', 'subtotal', 'line total'],
+  };
+
+  let headerYIdx = -1;
+  let colPositions = {};
+
+  for (let i = 0; i < sortedYs.length; i++) {
+    const rowItems = rowMap[sortedYs[i]].sort((a, b) => a.x - b.x);
+    const rowText = rowItems.map(r => r.str.toLowerCase()).join(' ');
+    const hasItem   = COL_KEYWORDS.item.some(k => rowText.includes(k));
+    const hasQty    = COL_KEYWORDS.qty.some(k => rowText.includes(k));
+    const hasPrice  = COL_KEYWORDS.price.some(k => rowText.includes(k));
+    const hasAmount = COL_KEYWORDS.amount.some(k => rowText.includes(k));
+
+    if (hasItem && (hasQty || hasPrice) && hasAmount) {
+      headerYIdx = i;
+      // Record x position of each column header word
+      rowItems.forEach(({ x, str }) => {
+        const sl = str.toLowerCase().trim();
+        if (COL_KEYWORDS.item.some(k => sl.includes(k)) && colPositions.item === undefined) colPositions.item = x;
+        if (COL_KEYWORDS.qty.some(k => sl.includes(k)) && colPositions.qty === undefined) colPositions.qty = x;
+        if (COL_KEYWORDS.price.some(k => sl.includes(k)) && colPositions.price === undefined) colPositions.price = x;
+        if (COL_KEYWORDS.amount.some(k => sl.includes(k)) && colPositions.amount === undefined) colPositions.amount = x;
+      });
+      break;
+    }
+  }
+
+  if (headerYIdx < 0 || colPositions.amount === undefined) return [];
+
+  // Column boundaries (with 5px tolerance)
+  const xQty    = colPositions.qty    !== undefined ? colPositions.qty    : (colPositions.price  || 9999);
+  const xPrice  = colPositions.price  !== undefined ? colPositions.price  : (colPositions.amount || 9999);
+  const xAmount = colPositions.amount !== undefined ? colPositions.amount : 9999;
+
+  // Step 3: Extract data rows below the header
+  const results = [];
+  let consecutiveBlanks = 0;
+
+  for (let i = headerYIdx + 1; i < sortedYs.length; i++) {
+    const rowItems = rowMap[sortedYs[i]].sort((a, b) => a.x - b.x);
+    const rowText = rowItems.map(r => r.str).join(' ').trim();
+
+    // Stop at Total/Subtotal row (short rows only, to avoid stopping at items named "Total...")
+    if (/\bTotal\b/i.test(rowText) && rowItems.length <= 4) break;
+
+    // Skip blank rows
+    if (!rowText) {
+      if (results.length > 0) consecutiveBlanks++;
+      if (consecutiveBlanks >= 2) break;
+      continue;
+    }
+    consecutiveBlanks = 0;
+
+    // Assign each text item to a column based on x position
+    const itemParts = [], qtyParts = [], priceParts = [], amtParts = [];
+    rowItems.forEach(({ x, str }) => {
+      if (x < xQty - 5)         itemParts.push(str);
+      else if (x < xPrice - 5)  qtyParts.push(str);
+      else if (x < xAmount - 5) priceParts.push(str);
+      else                       amtParts.push(str);
+    });
+
+    const rawItem  = itemParts.join(' ').trim();
+    const rawQty   = qtyParts.join(' ').trim();
+    const rawPrice = priceParts.join(' ').trim();
+    const rawAmt   = amtParts.join(' ').trim();
+
+    if (!rawItem) continue;
+    // Skip header-like rows
+    if (COL_KEYWORDS.item.some(k => rawItem.toLowerCase() === k)) continue;
+
+    const qty       = parseInt(rawQty.replace(/,/g, '')) || 0;
+    const unitPrice = parseFloat(rawPrice.replace(/[$,]/g, '')) || 0;
+    const amount    = parseFloat(rawAmt.replace(/[$,]/g, '')) || 0;
+
+    // Must have at least one numeric value to be a real data row
+    if (qty === 0 && unitPrice === 0 && amount === 0) continue;
+
+    results.push({
+      itemCode:    rawItem,
+      description: '',
+      qty,
+      unitPrice:   unitPrice || (qty > 0 && amount > 0 ? Math.round(amount / qty * 100) / 100 : 0),
+      amount:      amount    || (qty > 0 && unitPrice > 0 ? Math.round(qty * unitPrice * 100) / 100 : 0)
+    });
+  }
+
+  return results;
+}
+
 function _parsePoLinesByColumnPosition(text) {
   const rawLines = text.split('\n');
   const results = [];
