@@ -986,7 +986,7 @@ function initFirebase() {
       if (user) {
         _fbUser = user;
         _fbEnabled = true;
-        _fbDataPath = 'data/' + user.uid;
+        _fbDataPath = 'shared/neofiber'; // shared data path for all users
         updateFbLoginUI();
         setSyncStatus('syncing', '載入雲端資料...');
         fbLoadAllFromCloud().then(() => {
