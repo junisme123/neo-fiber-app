@@ -6226,47 +6226,12 @@ function parsePoPdfLocal(text, filename) {
     }
   }
 
-  // ── 5. Line Items ─────────────────────────────────────────
-  const lineItems = [];
-  // Pattern: look for lines with item code + qty + price structure
-  // Common format: ItemCode  Description  Qty  UnitPrice  Amount
-  const lineRe = /([A-Z][A-Z0-9\-\.]{2,20})\s+(.{5,60}?)\s+(\d+)\s+[\$]?([\d,]+\.\d{2})\s+[\$]?([\d,]+\.\d{2})/g;
-  let lm;
-  while ((lm = lineRe.exec(text)) !== null) {
-    const qty = parseInt(lm[3]);
-    const unitPrice = parseFloat(lm[4].replace(/,/g,''));
-    const amount = parseFloat(lm[5].replace(/,/g,''));
-    if (qty > 0 && unitPrice > 0 && amount > 0) {
-      lineItems.push({
-        itemCode: lm[1],
-        description: lm[2].trim(),
-        qty,
-        unitPrice,
-        amount
-      });
-    }
-  }
-  // If no line items found, try simpler pattern
-  if (lineItems.length === 0) {
-    const simpleRe = /([A-Z][A-Z0-9\-\.]{2,20})\s+(\d+)\s+[\$]?([\d,]+\.\d{2})/g;
-    while ((lm = simpleRe.exec(text)) !== null) {
-      const qty = parseInt(lm[2]);
-      const amount = parseFloat(lm[3].replace(/,/g,''));
-      if (qty > 0 && amount > 0) {
-        lineItems.push({
-          itemCode: lm[1],
-          description: '',
-          qty,
-          unitPrice: amount / qty,
-          amount
-        });
-      }
-    }
-  }
+  // ── 5. Line Items: column-position based extraction ────────
+  const lineItems = _parsePoLinesByColumnPosition(text);
 
   // If totalAmount not found, sum line items
   if (totalAmount === 0 && lineItems.length > 0) {
-    totalAmount = lineItems.reduce((s,l) => s + l.amount, 0);
+    totalAmount = lineItems.reduce((s,l) => s + (l.amount||0), 0);
   }
 
   // ── 6. Notes / Special Instructions ────────────────────────────────────────────────────────────
@@ -6286,6 +6251,106 @@ function parsePoPdfLocal(text, filename) {
     _confidence: confidence,
     _source: 'local'
   };
+}
+
+// ── Parse PO line items by column position (pdftotext -layout output) ────────────────────────────────────────────────────────────
+// Strategy:
+//   1. Find the header row containing "Item" and "Amount" (and optionally Quantity/Price)
+//   2. Record the character-position of each column header
+//   3. For each data row below the header, slice by those positions
+//   4. Item spans from col 0 to the start of the Units/Quantity column
+//      (merging Item + Comments columns so the full name is preserved)
+//   5. Stop at a line containing "Total" or a blank line after data rows
+function _parsePoLinesByColumnPosition(text) {
+  const rawLines = text.split('\n');
+  const results = [];
+
+  // Step 1: Find header row
+  let headerIdx = -1;
+  let headerLine = '';
+  for (let i = 0; i < rawLines.length; i++) {
+    const l = rawLines[i];
+    const lu = l.toUpperCase();
+    // Need at least Item + (Quantity or Price) + Amount
+    const hasItem = lu.includes('ITEM');
+    const hasQty  = lu.includes('QUANTITY') || lu.includes('QTY');
+    const hasPrice = lu.includes('PRICE');
+    const hasAmt  = lu.includes('AMOUNT');
+    if (hasItem && (hasQty || hasPrice) && hasAmt) {
+      headerIdx = i;
+      headerLine = l;
+      break;
+    }
+  }
+  if (headerIdx < 0) return results; // No table header found
+
+  // Step 2: Determine column positions from header
+  const hUpper = headerLine.toUpperCase();
+  // Find start position of each column keyword
+  const posItem     = hUpper.indexOf('ITEM');
+  const posComments = hUpper.indexOf('COMMENTS');
+  const posUnits    = hUpper.indexOf('UNITS');
+  const posQty      = hUpper.indexOf('QUANTITY') >= 0 ? hUpper.indexOf('QUANTITY') : hUpper.indexOf('QTY');
+  const posPrice    = hUpper.indexOf('PRICE');
+  const posAmt      = hUpper.indexOf('AMOUNT');
+
+  // Item name spans from 0 to the first numeric column (Units or Quantity)
+  // If there is a Comments column, Item+Comments together form the full item name
+  // We use posUnits (if present) or posQty as the end of the item name region
+  const itemEnd = posUnits >= 0 ? posUnits : (posQty >= 0 ? posQty : posPrice);
+  const unitsEnd = posQty >= 0 ? posQty : posPrice;
+  const qtyEnd   = posPrice >= 0 ? posPrice : posAmt;
+  const priceEnd = posAmt >= 0 ? posAmt : 999;
+
+  // Step 3: Extract data rows
+  let consecutiveBlanks = 0;
+  for (let i = headerIdx + 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const lineTrimmed = line.trim();
+
+    // Stop at Total line
+    if (/\bTotal\b/i.test(lineTrimmed)) break;
+
+    // Skip blank lines (but stop if too many consecutive blanks after data)
+    if (!lineTrimmed) {
+      if (results.length > 0) consecutiveBlanks++;
+      if (consecutiveBlanks >= 2) break;
+      continue;
+    }
+    consecutiveBlanks = 0;
+
+    // Pad line to avoid out-of-bounds slicing
+    const padded = line.padEnd(120, ' ');
+
+    // Extract each field by column position
+    const rawItem = itemEnd > 0 ? padded.slice(0, itemEnd).trim() : '';
+    const rawUnits = (posUnits >= 0 && unitsEnd > posUnits) ? padded.slice(posUnits, unitsEnd).trim() : '';
+    const rawQty   = (posQty >= 0 && qtyEnd > posQty) ? padded.slice(posQty, qtyEnd).trim() : '';
+    const rawPrice = (posPrice >= 0 && priceEnd > posPrice) ? padded.slice(posPrice, priceEnd).trim() : '';
+    const rawAmt   = posAmt >= 0 ? padded.slice(posAmt).trim() : '';
+
+    // Skip rows where item is empty or looks like a header repeat
+    if (!rawItem) continue;
+    if (/^(item|comments|units|quantity|price|amount)$/i.test(rawItem)) continue;
+
+    // Parse numbers
+    const qty       = parseInt(rawQty.replace(/,/g,'')) || 0;
+    const unitPrice = parseFloat(rawPrice.replace(/,/g,'')) || 0;
+    const amount    = parseFloat(rawAmt.replace(/,/g,'').replace(/[^\d.]/g,'')) || 0;
+
+    // Must have at least a valid amount or qty to be a real data row
+    if (qty === 0 && unitPrice === 0 && amount === 0) continue;
+
+    results.push({
+      itemCode:    rawItem,
+      description: '',          // No description column in this PO format
+      qty,
+      unitPrice:   unitPrice || (qty > 0 && amount > 0 ? Math.round(amount/qty*100)/100 : 0),
+      amount:      amount || (qty > 0 && unitPrice > 0 ? Math.round(qty*unitPrice*100)/100 : 0)
+    });
+  }
+
+  return results;
 }
 
 function _parsePoTableLines_UNUSED(text) {
