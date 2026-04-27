@@ -329,9 +329,9 @@ input[type=number] { -moz-appearance: textfield; }
       Google 登入
     </button>
     <!-- Microsoft Login Button -->
-    <button id="msLoginBtn" onclick="msalLogin()" style="background:var(--accent);border:none;color:white;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px" title="登入後數據自動同步至 InvoiceSite SharePoint">
+    <button id="msLoginBtn" onclick="msalLogin()" style="background:var(--accent);border:none;color:white;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px">
       <svg width="14" height="14" viewBox="0 0 21 21" fill="white"><rect x="1" y="1" width="9" height="9"/><rect x="11" y="1" width="9" height="9"/><rect x="1" y="11" width="9" height="9"/><rect x="11" y="11" width="9" height="9"/></svg>
-      連接 OneDrive
+      Microsoft 登入
     </button>
   </div>
 </div>
@@ -1232,13 +1232,11 @@ const MSAL_CONFIG = {
 
 const GRAPH_SCOPES = ["Files.ReadWrite", "Files.ReadWrite.All", "Sites.Read.All", "User.Read"];
 
-// SharePoint InvoiceSite configuration
-const SHAREPOINT_HOST = "luckybellhk.sharepoint.com";
-const INVOICESITE_NAME = "InvoiceSite";  // Site name from URL /sites/InvoiceSite
-const EXCEL_FILE_NAME = "NeoFiber_Database.xlsx";  // Excel file in the site's document library
-const EXCEL_FOLDER_PATH = "/NeoFiber_Database.xlsx";  // Path relative to site drive root
-// Legacy personal OneDrive path (fallback)
-const EXCEL_DRIVE_PATH_LEGACY = "/personal/vincentmo_luckybell_com/Documents/Neo-Fiber Automation/NeoFiber_Database.xlsx";
+// SharePoint Excel file path (relative to OneDrive root)
+const EXCEL_DRIVE_PATH = "/personal/vincentmo_luckybell_com/Documents/Neo-Fiber Automation/NeoFiber_Database.xlsx";
+const SHAREPOINT_HOST = "luckybellhk-my.sharepoint.com";
+// File GUID from SharePoint URL (sourcedoc parameter) - used for cross-org access
+const EXCEL_FILE_GUID = "7E3E3BE8-5B1C-46F4-B6B6-CED3455B09DB";
 // Cached drive/item IDs resolved at runtime
 let _resolvedDriveId = null;
 let _resolvedItemId = null;
@@ -1314,10 +1312,10 @@ async function msalLogin() {
     _msalAccount = resp.account;
     _cloudEnabled = true;
     updateLoginUI();
-    setSyncStatus('syncing', '連接 InvoiceSite...');
+    setSyncStatus('syncing', '載入雲端資料...');
     await loadAllFromCloud();
-    setSyncStatus('synced', '✓ 已連接 InvoiceSite SharePoint');
-    toast('✅ 已連接 OneDrive：' + _msalAccount.name + '\n數據將自動同步至 InvoiceSite SharePoint', 'success');
+    setSyncStatus('synced', '雲端資料已載入');
+    toast('✅ 已登入：' + _msalAccount.name, 'success');
   } catch(e) {
     console.error('Login failed:', e);
     setSyncStatus('offline', '登入失敗，使用本地模式');
@@ -1418,141 +1416,93 @@ async function graphRequest(method, path, body) {
 }
 
 // ── Resolve Excel file location (supports cross-org access) ──
-// Resolve Excel file in InvoiceSite SharePoint document library
+// Strategy 1: Owner account (vincentmo) - use direct path
+// Strategy 2: Shared user - search shared files by GUID
+// Strategy 3: Shared user - search shared files by name
 async function resolveExcelFile() {
   if (_resolvedDriveId && _resolvedItemId) return;
 
-  // Strategy 1: InvoiceSite SharePoint site drive (primary - shared team site)
+  // Strategy 1: Try owner's SharePoint drive directly
   try {
     const siteData = await graphRequest('GET',
-      `/sites/${SHAREPOINT_HOST}:/sites/${INVOICESITE_NAME}`
+      `/sites/${SHAREPOINT_HOST}:/personal/vincentmo_luckybell_com:/drive`
     );
-    const siteId = siteData.id;
-    // Get the default document library drive
-    const driveData = await graphRequest('GET', `/sites/${siteId}/drive`);
-    const driveId = driveData.id;
-    // Try to get the Excel file from the root of the document library
-    try {
-      const fileData = await graphRequest('GET',
-        `/drives/${driveId}/root:${EXCEL_FOLDER_PATH}`
-      );
-      _resolvedDriveId = driveId;
-      _resolvedItemId = fileData.id;
-      console.log('[NeoFiber] Resolved via InvoiceSite drive:', driveId, fileData.id);
-      return;
-    } catch(e) {
-      // File doesn't exist yet - create it by uploading an empty Excel file
-      console.log('[NeoFiber] File not found in InvoiceSite, will create on first sync');
-      _resolvedDriveId = driveId;
-      _resolvedItemId = null;  // Will be set after creation
-      return;
-    }
+    const driveId = siteData.id;
+    const fileData = await graphRequest('GET',
+      `/drives/${driveId}/root:${EXCEL_DRIVE_PATH}`
+    );
+    _resolvedDriveId = driveId;
+    _resolvedItemId = fileData.id;
+    console.log('[NeoFiber] Resolved via owner drive:', driveId, fileData.id);
+    return;
   } catch(e) {
-    console.log('[NeoFiber] Strategy 1 (InvoiceSite) failed:', e.message);
+    console.log('[NeoFiber] Strategy 1 failed, trying shared files...');
   }
 
-  // Strategy 2: Search in InvoiceSite drives
-  try {
-    const siteData = await graphRequest('GET',
-      `/sites/${SHAREPOINT_HOST}:/sites/${INVOICESITE_NAME}`
-    );
-    const siteId = siteData.id;
-    const searchData = await graphRequest('GET',
-      `/sites/${siteId}/drive/search(q='${EXCEL_FILE_NAME}')`
-    );
-    if (searchData && searchData.value && searchData.value.length > 0) {
-      const match = searchData.value.find(f => f.name === EXCEL_FILE_NAME);
-      if (match) {
-        _resolvedDriveId = match.parentReference ? match.parentReference.driveId : null;
-        _resolvedItemId = match.id;
-        console.log('[NeoFiber] Resolved via InvoiceSite search:', _resolvedDriveId, _resolvedItemId);
-        return;
-      }
-    }
-  } catch(e) {
-    console.log('[NeoFiber] Strategy 2 (InvoiceSite search) failed:', e.message);
-  }
-
-  // Strategy 3: Legacy personal OneDrive (vincentmo) - fallback
+  // Strategy 2: Try me/drive (if logged in as owner)
   try {
     const fileData = await graphRequest('GET',
-      `/me/drive/root:${EXCEL_DRIVE_PATH_LEGACY}`
+      `/me/drive/root:${EXCEL_DRIVE_PATH}`
     );
     const driveData = await graphRequest('GET', '/me/drive');
     _resolvedDriveId = driveData.id;
     _resolvedItemId = fileData.id;
-    console.log('[NeoFiber] Resolved via legacy personal OneDrive');
+    console.log('[NeoFiber] Resolved via me/drive');
     return;
   } catch(e) {
-    console.log('[NeoFiber] Strategy 3 (legacy OneDrive) failed:', e.message);
+    console.log('[NeoFiber] Strategy 2 failed, trying shared with me...');
   }
 
-  // Strategy 4: Search across all accessible drives
+  // Strategy 3: Search in "Shared with me" (for external users)
+  try {
+    const sharedData = await graphRequest('GET',
+      `/me/drive/sharedWithMe`
+    );
+    if (sharedData && sharedData.value) {
+      // Match by file GUID or name
+      const match = sharedData.value.find(item =>
+        item.name === 'NeoFiber_Database.xlsx' ||
+        (item.remoteItem && item.remoteItem.id &&
+         item.remoteItem.id.toUpperCase().includes(EXCEL_FILE_GUID.replace(/-/g,'').toUpperCase().substring(0,8)))
+      );
+      if (match) {
+        const ri = match.remoteItem || match;
+        _resolvedDriveId = ri.parentReference ? ri.parentReference.driveId : (ri.remoteItem && ri.remoteItem.parentReference ? ri.remoteItem.parentReference.driveId : null);
+        _resolvedItemId = ri.id || (ri.remoteItem && ri.remoteItem.id);
+        if (_resolvedDriveId && _resolvedItemId) {
+          console.log('[NeoFiber] Resolved via sharedWithMe:', _resolvedDriveId, _resolvedItemId);
+          return;
+        }
+      }
+    }
+  } catch(e) {
+    console.log('[NeoFiber] Strategy 3 failed:', e.message);
+  }
+
+  // Strategy 4: Search by filename across all drives
   try {
     const searchData = await graphRequest('GET',
       `/me/drive/search(q='NeoFiber_Database')`
     );
     if (searchData && searchData.value && searchData.value.length > 0) {
-      const match = searchData.value.find(f => f.name === EXCEL_FILE_NAME);
+      const match = searchData.value.find(f => f.name === 'NeoFiber_Database.xlsx');
       if (match) {
         _resolvedDriveId = match.parentReference ? match.parentReference.driveId : null;
         _resolvedItemId = match.id;
-        console.log('[NeoFiber] Resolved via global search:', _resolvedDriveId, _resolvedItemId);
+        console.log('[NeoFiber] Resolved via search:', _resolvedDriveId, _resolvedItemId);
         return;
       }
     }
   } catch(e) {
-    console.log('[NeoFiber] Strategy 4 (global search) failed:', e.message);
+    console.log('[NeoFiber] Strategy 4 failed:', e.message);
   }
 
-  throw new Error('無法連接到 InvoiceSite SharePoint。請確認：\n1. 你的帳號有 InvoiceSite 的存取權限\n2. 已接受 SharePoint 站點邀請\n3. 網絡連接正常');
+  throw new Error('找不到 NeoFiber_Database.xlsx。請確認：\n1. 文件存在於 vincentmo 的 OneDrive\n2. 文件已共享給你的帳號（可編輯）\n3. 你已接受共享邀請');
 }
 
 // Build the base path for Excel API
-// If file doesn't exist yet, create it in InvoiceSite
 async function getExcelBasePath() {
   await resolveExcelFile();
-
-  // If drive resolved but file not found, create the Excel file
-  if (_resolvedDriveId && !_resolvedItemId) {
-    try {
-      const token = await getGraphToken();
-      if (!token) throw new Error('No token');
-      // Upload minimal valid .xlsx to InvoiceSite document library root
-      const xlsxB64 = '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';
-      const binary = atob(xlsxB64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const resp = await fetch(
-        `https://graph.microsoft.com/v1.0/drives/${_resolvedDriveId}/root:/${EXCEL_FILE_NAME}:/content`,
-        {
-          method: 'PUT',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-          },
-          body: bytes
-        }
-      );
-      if (resp.ok) {
-        const fileData = await resp.json();
-        _resolvedItemId = fileData.id;
-        console.log('[NeoFiber] Created NeoFiber_Database.xlsx in InvoiceSite:', fileData.id);
-        // Wait for Excel to be ready
-        await new Promise(r => setTimeout(r, 2000));
-      } else {
-        throw new Error('Upload failed: ' + resp.status);
-      }
-    } catch(e) {
-      console.error('[NeoFiber] Failed to create Excel file:', e);
-      throw new Error('無法在 InvoiceSite 創建 NeoFiber_Database.xlsx：' + e.message);
-    }
-  }
-
-  if (!_resolvedDriveId || !_resolvedItemId) {
-    throw new Error('無法解析 Excel 文件位置，請重新登入');
-  }
-
   return `/drives/${_resolvedDriveId}/items/${_resolvedItemId}/workbook`;
 }
 
