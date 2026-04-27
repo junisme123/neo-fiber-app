@@ -10308,7 +10308,7 @@ function renderShipmentPlanner() {
       '<td style="vertical-align:top;padding:8px 6px"><span class="badge ' + stClass + '">' + stLabel + '</span></td>' +
       '<td style="vertical-align:top;padding:8px 6px;font-size:12px"><div>' + (p.orderDate||'') + '</div><div style="font-size:10px;color:var(--text-muted);margin-top:2px" title="' + planInfo.replace(/"/g,'&quot;') + '">' + (p.plannedShipments||[]).length + ' planned, ' + (p.actualShipments||[]).length + ' shipped</div></td>' +
       '<td style="vertical-align:top;padding:8px 6px;white-space:nowrap;font-size:11px">' +
-        '<button class="btn btn-outline btn-sm" style="padding:2px 8px" onclick="showAddShipmentPlan()">+Ship</button> ' +
+        '<button class="btn btn-outline btn-sm" style="padding:2px 8px" onclick="spQuickAddShip(\' + ck + \', + p.id + \')">+Ship</button> ' +
         '<button class="btn btn-outline btn-sm" style="padding:2px 8px" onclick="editSpPlan(\'' + ck + '\',' + p.id + ')">✏️</button> ' +
         '<button class="btn btn-outline btn-sm" style="padding:2px 8px;color:#dc2626" onclick="if(confirm(\'Delete this plan?\'))deleteSpPlanRow(\'' + ck + '\',' + p.id + ')">🗑</button>' +
       '</td></tr>';
@@ -10422,6 +10422,13 @@ function closeSpModal() {
   document.getElementById('spModal')?.remove();
 }
 
+function spQuickAddShip(ck, planId) {
+  // Pre-fill showAddSpPlan with clientKey and planId
+  var clientData = spfClients[ck];
+  if (!clientData) { showAddSpPlan(ck, null); return; }
+  var plan = (clientData.plans || []).find(function(p) { return p.id === planId; });
+  showAddSpPlan(ck, plan ? planId : null);
+}
 function showAddShipmentPlan() {
   const sel = document.getElementById('sp_client');
   const ck = sel?.value || '';
