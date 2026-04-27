@@ -10312,7 +10312,7 @@ function renderShipmentPlanner() {
         <span class="badge ${stClass}">${stLabel}</span>
       </td>
       <td style="vertical-align:top;padding:10px 8px;font-size:12px;color:var(--text-muted)">
-        <div>${p.orderDate||''}</div>
+        <div style="color:${p.shipmentDate?'var(--primary)':'inherit'}">${p.shipmentDate||p.orderDate||''}</div>
         <div style="margin-top:4px">${p.plannedShipments?.length||0} planned · ${p.actualShipments?.length||0} shipped</div>
         ${p.notes ? `<div style="margin-top:4px;font-style:italic">${escapeXml(p.notes)}</div>` : ''}
       </td>
@@ -10369,6 +10369,10 @@ function showAddSpPlan(clientKey, editPlan) {
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Order Date</label>
         <input type="date" id="spf_orderDate" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${editPlan?.orderDate||''}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Shipment Date <span style="opacity:0.6">(优先)</span></label>
+        <input type="date" id="spf_shipmentDate" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${editPlan?.shipmentDate||''}">
       </div>
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Item Code</label>
@@ -10481,6 +10485,7 @@ function saveSpPlan(clientKey, editId) {
   if (!clientKey) { toast('No client selected', 'error'); return; }
   const poNo = document.getElementById('spf_poNo')?.value?.trim();
   const orderDate = document.getElementById('spf_orderDate')?.value?.trim() || '';
+  const shipmentDate = document.getElementById('spf_shipmentDate')?.value?.trim() || '';
   const itemCode = document.getElementById('spf_itemCode')?.value?.trim() || '';
   const nfSpec = document.getElementById('spf_nfSpec')?.value?.trim() || '';
   const qty = parseFloat(document.getElementById('spf_qty')?.value) || 0;
@@ -10489,7 +10494,7 @@ function saveSpPlan(clientKey, editId) {
 
   if (!poNo) { toast('PO No. is required', 'error'); return; }
 
-  const plan = { poNo, orderDate, itemCode, nfSpec, qty, unitPrice, notes, plannedShipments: [], actualShipments: [] };
+  const plan = { poNo, orderDate, shipmentDate, itemCode, nfSpec, qty, unitPrice, notes, plannedShipments: [], actualShipments: [] };
 
   if (editId !== null) {
     const plans = spPlans[clientKey] || [];
@@ -10618,7 +10623,7 @@ function removeSpPlanShipment(clientKey, planId, idx, type) {
 function exportShipmentPlan() {
   loadSpPlans();
   let csv = '﻿'; // BOM
-  csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes\n';
+  csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Shipment Date,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes\n';
   Object.entries(spPlans).forEach(([ck, plans]) => {
     const clientLabel = (() => {
       if (ck.startsWith('custom_')) {
@@ -10634,7 +10639,7 @@ function exportShipmentPlan() {
       const remaining = Math.max(0, totalQty - shipped);
       const plannedStr = (p.plannedShipments || []).map(s => `${s.date||''}(${s.qty||0})`).join('; ');
       const actualStr = (p.actualShipments || []).map(s => `${s.date||''}(${s.qty||0}${s.invoiceNo?' INV:'+s.invoiceNo:''})`).join('; ');
-      csv += `"${clientLabel}","${p.poNo||''}","${p.itemCode||''}","${p.nfSpec||''}",${totalQty},${parseFloat(p.unitPrice||0).toFixed(2)},${st},"${p.orderDate||''}","${plannedStr}","${actualStr}",${remaining},"${(p.notes||'').replace(/"/g,'""')}"
+      csv += `"${clientLabel}","${p.poNo||''}","${p.itemCode||''}","${p.nfSpec||''}",${totalQty},${parseFloat(p.unitPrice||0).toFixed(2)},${st},"${p.shipmentDate||p.orderDate||''}","${p.orderDate||''}","${plannedStr}","${actualStr}",${remaining},"${(p.notes||'').replace(/"/g,'""')}"
 `;
     });
   });
