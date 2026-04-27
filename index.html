@@ -341,6 +341,7 @@ input[type=number] { -moz-appearance: textfield; }
   <button class="main-tab" onclick="switchTab(&#39;customers&#39;)">👤 Customer Info</button>
   <button class="main-tab active" onclick="switchTab(&#39;orderstatus&#39;)">📦 Orders &amp; Prices</button>
   <button class="main-tab" onclick="switchTab(&#39;history&#39;)">📋 Invoice History</button>
+  <button class="main-tab" onclick="switchTab(&#39;planner&#39;)">🚢 Shipment Planner</button>
   <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow &amp; PO Import</button>
 </div>
 
@@ -634,7 +635,7 @@ input[type=number] { -moz-appearance: textfield; }
       </div>
       <div id="historyContent">
     <table class="history-table">
-      <thead><tr><th>Date</th><th>Client</th><th>Type</th><th>Invoice No.</th><th>Invoice Date</th><th>Total Qty</th><th>Total Amount</th><th>Filename</th></tr></thead>
+      <thead><tr><th>Date</th><th>Client</th><th>Type</th><th>Invoice No.</th><th>Invoice Date</th><th>Total Qty</th><th>Total Amount</th><th>Filename</th><th style="width:90px">Actions</th></tr></thead>
       <tbody>
         <tr>
           <td>2026/4/17</td>
@@ -1873,7 +1874,7 @@ let customClients = loadCustomClients();
 // ============================================================
 function switchTab(tab) {
   document.querySelectorAll('.main-tab').forEach((t,i) => {
-    const tabs = ['create','customers','orderstatus','history','cashflow'];
+    const tabs = ['create','customers','orderstatus','history','planner','cashflow'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -1883,6 +1884,7 @@ function switchTab(tab) {
   if (tab === 'history') renderHistory();
   if (tab === 'cashflow') { renderCashflow(); initApiKeyInput(); }
   if (tab === 'orderstatus') { initOrderStatusTabs(); renderOrderStatus(); }
+  if (tab === 'planner') { initShipmentPlanner(); renderShipmentPlanner(); }
 }
 
 // ============================================================
@@ -4553,6 +4555,24 @@ function resetCustInfo(key) {
 // ============================================================
 // HISTORY TAB
 // ============================================================
+
+// ── Delete History Record ────────────────────────────────────────
+function deleteHistory(idx) {
+  if (!confirm('Delete this invoice record? This cannot be undone.')) return;
+  const history = loadHistory();
+  if (idx < 0 || idx >= history.length) return;
+  const removed = history.splice(idx, 1)[0];
+  saveHistory(history);
+  // Also remove from cashflow
+  const cfRecords = loadCashflowRecords();
+  const cfIdx = cfRecords.findIndex(r =>
+    r.invoiceNo === removed.invoiceNo && r.clientKey === removed.clientKey
+  );
+  if (cfIdx >= 0) { cfRecords.splice(cfIdx, 1); saveCashflowRecords(cfRecords); }
+  toast('✓ Invoice record deleted', 'success');
+  renderHistory();
+}
+
 function renderHistory() {
   const history = loadHistory();
   const content = document.getElementById('historyContent');
@@ -4573,7 +4593,7 @@ function renderHistory() {
           <td>${h.totalQty}</td>
           <td>${h.totalAmount}</td>
           <td style="font-size:11px;color:var(--text-muted)">${escapeXml(h.filename)}</td>
-          <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="loadHistoryEntryToForm(${idx})">&#9998; Edit</button></td>
+          <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="loadHistoryEntryToForm(${idx})">&#9998; Edit</button>&nbsp;<button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:#dc2626" onclick="if(confirm('Delete this invoice record?'))deleteHistory(${idx})">🗑</button></td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -10101,10 +10121,548 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('MSAL init error:', e);
   }
 });
+
+
+// ══════════════════════════════════════════════════════════════════
+// SHIPMENT PLANNER
+// Data: localStorage['nf_shipment_planner']
+// Structure: { [clientKey]: [ { id, poNo, orderDate, itemCode,
+//           nfSpec, qty, unitPrice, plannedShipments: [],
+//           actualShipments: [], notes, createdAt }, ... ] }
+// ══════════════════════════════════════════════════════════════════
+
+let spCurrentClient = '';
+let spPlans = {};
+let _spNextId = 1;
+
+function loadSpPlans() {
+  try {
+    const d = localStorage.getItem('nf_shipment_planner');
+    if (d) {
+      const parsed = JSON.parse(d);
+      spPlans = parsed.plans || {};
+      _spNextId = parsed.nextId || 1;
+    } else {
+      spPlans = {};
+      _spNextId = 1;
+    }
+  } catch(e) { spPlans = {}; _spNextId = 1; }
+  return spPlans;
+}
+function saveSpPlans() {
+  localStorage.setItem('nf_shipment_planner', JSON.stringify({ plans: spPlans, nextId: _spNextId }));
+  if (_fbEnabled) fbScheduleSync('nf_shipment_planner', spPlans);
+  if (_cloudEnabled) scheduleSync('nf_shipment_planner', spPlans);
+}
+function getSpPlans(clientKey) {
+  if (!clientKey) return spPlans;
+  return { [clientKey]: spPlans[clientKey] || [] };
+}
+function addSpPlan(clientKey, plan) {
+  if (!spPlans[clientKey]) spPlans[clientKey] = [];
+  plan.id = _spNextId++;
+  plan.createdAt = new Date().toISOString();
+  spPlans[clientKey].push(plan);
+  saveSpPlans();
+}
+function updateSpPlan(clientKey, planId, updates) {
+  const plans = spPlans[clientKey] || [];
+  const idx = plans.findIndex(p => p.id === planId);
+  if (idx >= 0) { Object.assign(plans[idx], updates); saveSpPlans(); }
+}
+function deleteSpPlan(clientKey, planId) {
+  const plans = spPlans[clientKey] || [];
+  spPlans[clientKey] = plans.filter(p => p.id !== planId);
+  saveSpPlans();
+}
+function getClientOpenPOs(clientKey) {
+  // Pull PO nos from Order Status for this client
+  const orders = getClientOrders(clientKey);
+  return [...new Set((orders || []).map(o => o.poNo).filter(Boolean))];
+}
+function computeSpStatus(plan) {
+  const totalQty = parseFloat(plan.qty) || 0;
+  const shipped = (plan.actualShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+  const planned = (plan.plannedShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+  if (shipped >= totalQty && totalQty > 0) return 'complete';
+  if (shipped > 0) return 'partial';
+  if (planned > 0 || plan.plannedShipments?.length > 0) return 'planned';
+  return 'pending';
+}
+
+// ── Init client selector ───────────────────────────────────────
+function initShipmentPlanner() {
+  loadSpPlans();
+  const sel = document.getElementById('sp_client');
+  if (!sel) return;
+  const clients = Object.entries(CLIENT_CONFIGS).map(([k, cfg]) => ({ key: k, label: cfg.label }));
+  customClients.forEach(cc => clients.push({ key: 'custom_' + cc.code, label: cc.label || cc.name || cc.code }));
+  sel.innerHTML = '<option value="">All Clients</option>' +
+    clients.map(c => `<option value="${c.key}">${escapeXml(c.label)}</option>`).join('');
+  sel.value = spCurrentClient || '';
+}
+
+// ── Render ──────────────────────────────────────────────────────
+function renderShipmentPlanner() {
+  loadSpPlans();
+  const sel = document.getElementById('sp_client');
+  const statusFilter = document.getElementById('sp_status')?.value || '';
+  const fromMonth = document.getElementById('sp_fromMonth')?.value || '';
+  const toMonth = document.getElementById('sp_toMonth')?.value || '';
+  const clientKey = sel?.value || '';
+
+  // Collect all plans
+  let allPlans = [];
+  const clientsToScan = clientKey ? [clientKey] : Object.keys(spPlans);
+  clientsToScan.forEach(ck => {
+    (spPlans[ck] || []).forEach(p => allPlans.push({ ...p, _clientKey: ck })));
+  });
+
+  // Filter
+  let filtered = allPlans.filter(p => {
+    if (statusFilter && computeSpStatus(p) !== statusFilter) return false;
+    if (fromMonth && p.plannedShipments?.length > 0) {
+      const firstPlan = p.plannedShipments[0];
+      if (firstPlan.date && firstPlan.date < fromMonth + '-01') return false;
+    }
+    if (toMonth && p.plannedShipments?.length > 0) {
+      const lastPlan = p.plannedShipments[p.plannedShipments.length - 1];
+      if (lastPlan.date && lastPlan.date > toMonth + '-31') return false;
+    }
+    return true;
+  });
+
+  // Sort by order date desc
+  filtered.sort((a, b) => (a.orderDate || '') < (b.orderDate || '') ? 1 : -1);
+
+  // Stats
+  const totalPos = filtered.length;
+  const totalQty = filtered.reduce((s, p) => s + (parseFloat(p.qty) || 0), 0);
+  const shippedQty = filtered.reduce((s, p) => s + (p.actualShipments || []).reduce((ss, sh) => ss + (parseFloat(sh.qty) || 0), 0), 0);
+  const plannedCount = filtered.filter(p => computeSpStatus(p) === 'planned').length;
+  const remaining = totalQty - shippedQty;
+  document.getElementById('sp_totalPos').textContent = totalPos;
+  document.getElementById('sp_totalQty').textContent = totalQty.toLocaleString();
+  document.getElementById('sp_plannedCount').textContent = plannedCount;
+  document.getElementById('sp_shippedQty').textContent = shippedQty.toLocaleString();
+  document.getElementById('sp_remaining').textContent = Math.max(0, remaining).toLocaleString();
+
+  const wrapper = document.getElementById('sp_tableWrapper');
+  if (!wrapper) return;
+
+  if (filtered.length === 0) {
+    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px"><div style="font-size:48px;margin-bottom:12px">🚢</div><p>No shipment plans yet.</p><p style="font-size:12px">Click <b>+ Add Plan</b> to create one.</p></div>';
+    return;
+  }
+
+  const rows = filtered.map((p, i) => {
+    const st = computeSpStatus(p);
+    const stClass = { pending: 'badge-pending', planned: 'badge-planned', partial: 'badge-partial', complete: 'badge-complete' }[st] || 'badge-pending';
+    const stLabel = { pending: 'Pending', planned: 'Planned', partial: 'Partial', complete: 'Complete' }[st] || st;
+    const totalQty2 = parseFloat(p.qty) || 0;
+    const shipped2 = (p.actualShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+    const remaining2 = Math.max(0, totalQty2 - shipped2);
+
+    // Planned shipments summary
+    const plannedRows = (p.plannedShipments || []).map((ps, pi) =>
+      `<tr style="background:#f8f9fa;font-size:12px">
+        <td colspan="3" style="padding-left:20px;color:var(--text-muted)">📅 Planned: ${ps.date || '—'} &nbsp; Qty: ${parseFloat(ps.qty)||0} &nbsp; ${escapeXml(ps.note||'')}</td>
+        <td colspan="2" style="text-align:right">
+          <button class="btn btn-outline btn-sm" style="padding:1px 6px;font-size:10px" onclick="editSpPlanShipment('${p._clientKey}',${p.id},${pi},'planned')">✏️</button>
+          <button class="btn btn-outline btn-sm" style="padding:1px 6px;font-size:10px;color:#dc2626" onclick="if(confirm('Remove this planned shipment?'))removeSpPlanShipment('${p._clientKey}',${p.id},${pi},'planned')">🗑</button>
+        </td>
+      </tr>`
+    ).join('');
+
+    // Actual shipments summary
+    const actualRows = (p.actualShipments || []).map((as, ai) =>
+      `<tr style="background:#e8f5e9;font-size:12px">
+        <td colspan="3" style="padding-left:20px;color:var(--success)">✅ Actual: ${as.date || '—'} &nbsp; Qty: ${parseFloat(as.qty)||0} &nbsp; Invoice: ${escapeXml(as.invoiceNo||'')}</td>
+        <td colspan="2" style="text-align:right">
+          <button class="btn btn-outline btn-sm" style="padding:1px 6px;font-size:10px" onclick="editSpPlanShipment('${p._clientKey}',${p.id},${ai},'actual')">✏️</button>
+          <button class="btn btn-outline btn-sm" style="padding:1px 6px;font-size:10px;color:#dc2626" onclick="if(confirm('Remove this actual shipment?'))removeSpPlanShipment('${p._clientKey}',${p.id},${ai},'actual')">🗑</button>
+        </td>
+      </tr>`
+    ).join('');
+
+    const clientLabel = (() => {
+      if (p._clientKey.startsWith('custom_')) {
+        const cc = customClients.find(c => 'custom_' + c.code === p._clientKey);
+        return cc?.label || cc?.name || p._clientKey;
+      }
+      return CLIENT_CONFIGS[p._clientKey]?.label || p._clientKey;
+    })();
+
+    return `<tr style="border-bottom:2px solid var(--border);background:white" id="sp_row_${p.id}">
+      <td style="vertical-align:top;padding:10px 8px">
+        <div style="font-weight:600;color:var(--primary)">${escapeXml(p.poNo||'')}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escapeXml(clientLabel||'')}</div>
+      </td>
+      <td style="vertical-align:top;padding:10px 8px">
+        <div>${escapeXml(p.itemCode||'')}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escapeXml(p.nfSpec||'')}</div>
+      </td>
+      <td style="vertical-align:top;padding:10px 8px;font-size:12px">
+        <div>📦 Total: <b>${totalQty2.toLocaleString()}</b></div>
+        <div>✅ Shipped: <b style="color:var(--success)">${shipped2.toLocaleString()}</b></div>
+        <div>⏳ Remaining: <b style="color:var(--warning)">${remaining2.toLocaleString()}</b></div>
+        <div>💰 Unit: USD ${parseFloat(p.unitPrice||0).toFixed(2)}</div>
+      </td>
+      <td style="vertical-align:top;padding:10px 8px">
+        <span class="badge ${stClass}">${stLabel}</span>
+      </td>
+      <td style="vertical-align:top;padding:10px 8px;font-size:12px;color:var(--text-muted)">
+        <div>${p.orderDate||''}</div>
+        <div style="margin-top:4px">${p.plannedShipments?.length||0} planned · ${p.actualShipments?.length||0} shipped</div>
+        ${p.notes ? `<div style="margin-top:4px;font-style:italic">${escapeXml(p.notes)}</div>` : ''}
+      </td>
+      <td style="vertical-align:top;padding:10px 8px;white-space:nowrap">
+        <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="showAddSpShipment('${p._clientKey}',${p.id})">+ Shipment</button><br>
+        <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px;margin-top:4px" onclick="editSpPlan('${p._clientKey}',${p.id})">✏️ Edit</button><br>
+        <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px;color:#dc2626;margin-top:4px" onclick="if(confirm('Delete this plan?'))deleteSpPlanRow('${p._clientKey}',${p.id})">🗑 Del</button>
+      </td>
+    </tr>
+    ${plannedRows}
+    ${actualRows}
+    <tr><td colspan="5" style="border:none;height:6px"></td></tr>`;
+  }).join('');
+
+  wrapper.innerHTML = `<table style="width:100%;border-collapse:collapse">
+    <thead>
+      <tr style="background:var(--bg-secondary);border-bottom:2px solid var(--border)">
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">PO / Client</th>
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">Item</th>
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">Qty Info</th>
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">Status</th>
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">Dates / Notes</th>
+        <th style="text-align:left;padding:8px 8px;font-size:11px;text-transform:uppercase">Actions</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+// ── Show Add/Edit Plan Modal ────────────────────────────────────
+function showAddSpPlan(clientKey, editPlan) {
+  const isEdit = !!editPlan;
+  const sel = document.getElementById('sp_client');
+  const ck = clientKey || sel?.value || '';
+
+  // Gather available POs from Order Status
+  let poOptions = '';
+  if (ck) {
+    const orders = getClientOrders(ck);
+    const pos = [...new Set((orders || []).map(o => o.poNo).filter(Boolean))];
+    poOptions = pos.map(p => `<option value="${escapeXml(p)}" ${editPlan?.poNo === p ? 'selected' : ''}>${escapeXml(p)}</option>`).join('');
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'spModal';
+  modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `<div style="background:white;border-radius:12px;padding:24px;width:600px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <h3 style="margin:0 0 20px;font-size:16px">${isEdit ? '✏️ Edit Shipment Plan' : '+ Add Shipment Plan'}</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">PO No.</label>
+        ${poOptions ? `<select id="spf_poNo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="spfOnPoChange()">${poOptions}</select>` : `<input id="spf_poNo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.poNo||'')}" placeholder="e.g. KS-2026-001">`}
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Order Date</label>
+        <input type="date" id="spf_orderDate" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${editPlan?.orderDate||''}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Item Code</label>
+        <input id="spf_itemCode" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.itemCode||'')}" placeholder="e.g. NB-BC-001">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">NF Spec</label>
+        <input id="spf_nfSpec" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.nfSpec||'')}" placeholder="e.g. 6mm x 550mm">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Total Qty</label>
+        <input type="number" id="spf_qty" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${editPlan?.qty||''}" placeholder="0">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Unit Price (USD)</label>
+        <input type="number" step="0.01" id="spf_unitPrice" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${editPlan?.unitPrice||''}" placeholder="0.00">
+      </div>
+      <div style="grid-column:1/-1">
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Notes</label>
+        <textarea id="spf_notes" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;resize:vertical;min-height:60px" placeholder="Optional notes...">${escapeXml(editPlan?.notes||'')}</textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+      <button class="btn btn-outline" onclick="closeSpModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSpPlan('${ck}',${editPlan?.id||'null'})">${isEdit ? 'Save Changes' : 'Add Plan'}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+function closeSpModal() {
+  document.getElementById('spModal')?.remove();
+}
+
+function showAddShipmentPlan() {
+  const sel = document.getElementById('sp_client');
+  const ck = sel?.value || '';
+  if (!ck) { toast('Please select a client first', 'error'); return; }
+  showAddSpPlan(ck, null);
+}
+
+function spfOnPoChange() {
+  // Auto-fill from Order Status when PO is selected
+  const poNo = document.getElementById('spf_poNo')?.value;
+  const sel = document.getElementById('sp_client');
+  const ck = sel?.value || '';
+  if (!poNo || !ck) return;
+  const orders = getClientOrders(ck) || [];
+  const order = orders.find(o => o.poNo === poNo);
+  if (!order) return;
+  if (order.itemCode && !document.getElementById('spf_itemCode')?.value)
+    document.getElementById('spf_itemCode').value = order.itemCode || '';
+  if (order.nfSpec && !document.getElementById('spf_nfSpec')?.value)
+    document.getElementById('spf_nfSpec').value = order.nfSpec || '';
+  if (order.qty && !document.getElementById('spf_qty')?.value)
+    document.getElementById('spf_qty').value = order.qty || '';
+  if (order.unitPrice && !document.getElementById('spf_unitPrice')?.value)
+    document.getElementById('spf_unitPrice').value = order.unitPrice || '';
+}
+
+function saveSpPlan(clientKey, editId) {
+  if (!clientKey) { toast('No client selected', 'error'); return; }
+  const poNo = document.getElementById('spf_poNo')?.value?.trim();
+  const orderDate = document.getElementById('spf_orderDate')?.value?.trim() || '';
+  const itemCode = document.getElementById('spf_itemCode')?.value?.trim() || '';
+  const nfSpec = document.getElementById('spf_nfSpec')?.value?.trim() || '';
+  const qty = parseFloat(document.getElementById('spf_qty')?.value) || 0;
+  const unitPrice = parseFloat(document.getElementById('spf_unitPrice')?.value) || 0;
+  const notes = document.getElementById('spf_notes')?.value?.trim() || '';
+
+  if (!poNo) { toast('PO No. is required', 'error'); return; }
+
+  const plan = { poNo, orderDate, itemCode, nfSpec, qty, unitPrice, notes, plannedShipments: [], actualShipments: [] };
+
+  if (editId !== null) {
+    const plans = spPlans[clientKey] || [];
+    const idx = plans.findIndex(p => p.id === editId);
+    if (idx >= 0) {
+      const existing = plans[idx];
+      plan.plannedShipments = existing.plannedShipments || [];
+      plan.actualShipments = existing.actualShipments || [];
+      plan.id = editId;
+      plan.createdAt = existing.createdAt;
+      plans[idx] = plan;
+    }
+    toast('✓ Plan updated', 'success');
+  } else {
+    if (!spPlans[clientKey]) spPlans[clientKey] = [];
+    plan.id = _spNextId++;
+    plan.createdAt = new Date().toISOString();
+    spPlans[clientKey].push(plan);
+    toast('✓ Plan added', 'success');
+  }
+  saveSpPlans();
+  closeSpModal();
+  renderShipmentPlanner();
+}
+
+function editSpPlan(clientKey, planId) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+  showAddSpPlan(clientKey, plan);
+}
+
+function deleteSpPlanRow(clientKey, planId) {
+  deleteSpPlan(clientKey, planId);
+  toast('✓ Plan deleted', 'success');
+  renderShipmentPlanner();
+}
+
+// ── Add/Edit Shipment (planned or actual) ──────────────────────
+function showAddSpShipment(clientKey, planId, editIdx, type) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+  const arr = type === 'planned' ? (plan.plannedShipments || []) : (plan.actualShipments || []);
+  const editItem = editIdx !== undefined && editIdx !== null ? arr[editIdx] : null;
+
+  const modal = document.createElement('div');
+  modal.id = 'spShipModal';
+  modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `<div style="background:white;border-radius:12px;padding:24px;width:480px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <h3 style="margin:0 0 20px;font-size:16px">${editItem ? '✏️ Edit' : '+ Add'} ${type === 'planned' ? 'Planned' : 'Actual'} Shipment</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Date</label>
+        <input type="date" id="sps_date" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" value="${editItem?.date||''}">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Quantity</label>
+        <input type="number" id="sps_qty" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" value="${editItem?.qty||''}" placeholder="0">
+      </div>
+      ${type === 'actual' ? `
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Invoice No.</label>
+        <input id="sps_invoiceNo" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" value="${escapeXml(editItem?.invoiceNo||'')}" placeholder="e.g. INV-2026-001">
+      </div>` : ''}
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Note</label>
+        <input id="sps_note" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box" value="${escapeXml(editItem?.note||'')}" placeholder="Optional...">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+      <button class="btn btn-outline" onclick="closeSpShipModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSpShipment('${clientKey}',${planId},${editIdx !== undefined ? editIdx : 'null'},'${type}')">${editItem ? 'Save' : 'Add'}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+function closeSpShipModal() {
+  document.getElementById('spShipModal')?.remove();
+}
+
+function editSpPlanShipment(clientKey, planId, idx, type) {
+  showAddSpShipment(clientKey, planId, idx, type);
+}
+
+function saveSpShipment(clientKey, planId, editIdx, type) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+
+  const date = document.getElementById('sps_date')?.value?.trim() || '';
+  const qty = parseFloat(document.getElementById('sps_qty')?.value) || 0;
+  const note = document.getElementById('sps_note')?.value?.trim() || '';
+  const invoiceNo = document.getElementById('sps_invoiceNo')?.value?.trim() || '';
+
+  if (!date) { toast('Date is required', 'error'); return; }
+  if (!qty || qty <= 0) { toast('Quantity must be > 0', 'error'); return; }
+
+  const arrKey = type === 'planned' ? 'plannedShipments' : 'actualShipments';
+  if (!plan[arrKey]) plan[arrKey] = [];
+
+  const item = type === 'actual' ? { date, qty, invoiceNo, note } : { date, qty, note };
+  if (editIdx !== null && editIdx !== undefined) {
+    plan[arrKey][editIdx] = item;
+  } else {
+    plan[arrKey].push(item);
+  }
+  saveSpPlans();
+  closeSpShipModal();
+  toast(type === 'planned' ? '✓ Planned shipment added' : '✓ Actual shipment recorded', 'success');
+  renderShipmentPlanner();
+}
+
+function removeSpPlanShipment(clientKey, planId, idx, type) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+  const arrKey = type === 'planned' ? 'plannedShipments' : 'actualShipments';
+  plan[arrKey].splice(idx, 1);
+  saveSpPlans();
+  renderShipmentPlanner();
+}
+
+// ── Export CSV ─────────────────────────────────────────────────
+function exportShipmentPlan() {
+  loadSpPlans();
+  let csv = '﻿'; // BOM
+  csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes
+';
+  Object.entries(spPlans).forEach(([ck, plans]) => {
+    const clientLabel = (() => {
+      if (ck.startsWith('custom_')) {
+        const cc = customClients.find(c => 'custom_' + c.code === ck);
+        return cc?.label || cc?.name || ck;
+      }
+      return CLIENT_CONFIGS[ck]?.label || ck;
+    })();
+    (plans || []).forEach(p => {
+      const st = computeSpStatus(p);
+      const totalQty = parseFloat(p.qty) || 0;
+      const shipped = (p.actualShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+      const remaining = Math.max(0, totalQty - shipped);
+      const plannedStr = (p.plannedShipments || []).map(s => `${s.date||''}(${s.qty||0})`).join('; ');
+      const actualStr = (p.actualShipments || []).map(s => `${s.date||''}(${s.qty||0}${s.invoiceNo?' INV:'+s.invoiceNo:''})`).join('; ');
+      csv += `"${clientLabel}","${p.poNo||''}","${p.itemCode||''}","${p.nfSpec||''}",${totalQty},${parseFloat(p.unitPrice||0).toFixed(2)},${st},"${p.orderDate||''}","${plannedStr}","${actualStr}",${remaining},"${(p.notes||'').replace(/"/g,'""')}"
+`;
+    });
+  });
+  downloadBlob(csv, 'text/cisv;charset=utf-8', 'shipment_plan.csv');
+  toast('✓ CSV exported', 'success');
+}
+
+function downloadBlob(content, mimeType, filename) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+
+
 </script>
 
 
 
+
+<!-- ===== TAB: SHIPMENT PLANNER ===== -->
+<div id="tab-planner" class="tab-panel">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">🚢 Shipment Planner <span style="font-size:12px;font-weight:400;opacity:0.7;margin-left:8px">Plan &amp; track shipments per PO</span></div>
+    <div class="card-body">
+      <!-- Client selector + controls -->
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">CLIENT</label>
+          <select id="sp_client" onchange="renderShipmentPlanner()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:140px">
+            <option value="">All Clients</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">STATUS</label>
+          <select id="sp_status" onchange="renderShipmentPlanner()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:130px">
+            <option value="">All</option>
+            <option value="pending">Pending</option>
+            <option value="planned">Planned</option>
+            <option value="partial">Partial</option>
+            <option value="complete">Complete</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">FROM MONTH</label>
+          <input type="month" id="sp_fromMonth" onchange="renderShipmentPlanner()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">TO MONTH</label>
+          <input type="month" id="sp_toMonth" onchange="renderShipmentPlanner()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-primary btn-sm" onclick="showAddShipmentPlan()">+ Add Plan</button>
+          <button class="btn btn-outline btn-sm" onclick="exportShipmentPlan()">⬇ Export CSV</button>
+        </div>
+      </div>
+
+      <!-- Summary row -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">Total POs</div><div class="stat-value" id="sp_totalPos">0</div></div>
+        <div class="stat-card"><div class="stat-label">Total Qty</div><div class="stat-value" id="sp_totalQty">0</div></div>
+        <div class="stat-card"><div class="stat-label">Planned Shipments</div><div class="stat-value" id="sp_plannedCount">0</div></div>
+        <div class="stat-card"><div class="stat-label">Shipped Qty</div><div class="stat-value" id="sp_shippedQty">0</div></div>
+        <div class="stat-card"><div class="stat-label">Remaining</div><div class="stat-value" id="sp_remaining">0</div></div>
+      </div>
+
+      <!-- Planner table -->
+      <div id="sp_tableWrapper" style="overflow-x:auto">
+        <div style="text-align:center;color:var(--text-muted);padding:40px">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ===== TAB: CASHFLOW ===== -->
 <div id="tab-cashflow" class="tab-panel">
