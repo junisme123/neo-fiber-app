@@ -10424,9 +10424,8 @@ function closeSpModal() {
 
 function spQuickAddShip(ck, planId) {
   // Pre-fill showAddSpPlan with clientKey and planId
-  var clientData = spfClients[ck];
-  if (!clientData) { showAddSpPlan(ck, null); return; }
-  var plan = (clientData.plans || []).find(function(p) { return p.id === planId; });
+  var plans = spPlans[ck] || [];
+  var plan = plans.find(function(p) { return p.id === planId; });
   showAddSpPlan(ck, plan || null);
 }
 function showAddShipmentPlan() {
