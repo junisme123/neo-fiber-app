@@ -10819,152 +10819,215 @@ function renderShipmentPlannerTimeline() {
 }
 
 // Import Shipment Schedule from Excel
+// Import Shipment Schedule from Excel - Two-step wizard
+let _spImportWb = null;
+
 function showImportModal() {
-  const modal = document.createElement('div');
-  modal.id = 'importModal';
-  modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
-  modal.innerHTML = `<div style="background:white;border-radius:12px;padding:24px;width:500px;max-width:95vw">
-    <h3 style="margin:0 0:16px;font-size:16px">📥 Import Shipment Schedule</h3>
-    <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">
-      Import from Excel shipment schedule. Expected format:<br>
-      • Row 4: Headers (PO#, NF Item, date columns like 2026-03-16)<br>
-      • Row 5+: Data rows with shipment quantities in date columns
-    </p>
-    <div style="margin-bottom:16px">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Client</label>
-      <select id="import_client" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
-        <option value="">-- Select Client --</option>
-      </select>
-    </div>
-    <div style="margin-bottom:16px">
-      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Excel File</label>
-      <input type="file" id="import_file" accept=".xlsx,.xls" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
-    </div>
-    <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-outline" onclick="document.getElementById('importModal').remove()">Cancel</button>
-      <button class="btn btn-primary" onclick="importShipmentSchedule()">Import</button>
-    </div>
-  </div>`;
-  document.body.appendChild(modal);
-  
-  // Populate client dropdown
-  const sel = document.getElementById('import_client');
-  Object.keys(CLIENT_CONFIGS).forEach(k => {
-    const opt = document.createElement('option');
-    opt.value = k;
-    opt.textContent = CLIENT_CONFIGS[k].label || k;
-    sel.appendChild(opt);
-  });
-  customClients.forEach(c => {
-    const opt = document.createElement('option');
-    opt.value = 'custom_' + c.code;
-    opt.textContent = c.label || c.name;
-    sel.appendChild(opt);
-  });
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      if (typeof XLSX === 'undefined') {
+        await loadScript('https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js');
+      }
+      const buf = await file.arrayBuffer();
+      _spImportWb = XLSX.read(buf, { type: 'array', cellDates: true });
+      showSpImportStep1();
+    } catch(err) {
+      toast('Failed to read file: ' + err.message, 'error');
+    }
+  };
+  input.click();
 }
 
-async function importShipmentSchedule() {
-  const clientKey = document.getElementById('import_client')?.value;
-  if (!clientKey) { toast('Please select a client', 'error'); return; }
+function showSpImportStep1() {
+  if (!_spImportWb) return;
+  const sheets = _spImportWb.SheetNames;
   
-  const fileInput = document.getElementById('import_file');
-  if (!fileInput.files.length) { toast('Please select a file', 'error'); return; }
+  const sheetRows = sheets.map((name, i) => `
+    <tr style="border-bottom:1px solid #e5e7eb">
+      <td style="padding:8px 10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="spimp_sheet_${i}" value="${name}" checked style="width:16px;height:16px">
+          <span style="font-weight:600">${name}</span>
+        </label>
+      </td>
+      <td style="padding:8px 10px">
+        <select id="spimp_client_${i}" style="width:100%;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px">
+          ${buildClientOptions('')}
+        </select>
+      </td>
+    </tr>`).join('');
+
+  showModal(`
+    <div style="max-width:580px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">📥 Import Shipment Schedule</h3>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Step 1 of 2 — Select sheet(s) and assign client.</p>
+      <div style="max-height:320px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="background:#f1f5f9;position:sticky;top:0">
+            <th style="padding:8px 10px;text-align:left">Sheet Name</th>
+            <th style="padding:8px 10px;text-align:left">Import to Client</th>
+          </tr></thead>
+          <tbody>${sheetRows}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="showSpImportStep2()">Next: Map Columns →</button>
+      </div>
+    </div>
+  `);
+}
+
+function showSpImportStep2() {
+  if (!_spImportWb) return;
   
-  const file = fileInput.files[0];
-  const reader = new FileReader();
+  const selected = [];
+  _spImportWb.SheetNames.forEach((name, i) => {
+    const cb = document.getElementById('spimp_sheet_' + i);
+    const cl = document.getElementById('spimp_client_' + i);
+    if (cb && cb.checked) {
+      selected.push({ sheet: name, clientKey: cl ? cl.value : '' });
+    }
+  });
+  if (selected.length === 0) { toast('Please select at least one sheet', 'error'); return; }
   
-  reader.onload = async (e) => {
-    try {
-      const data = new Uint8Array(e.target.result);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const ws = _spImportWb.Sheets[selected[0].sheet];
+  const data = XLSX.utils.sheet_to_json(ws, { defval: '', header: 1 });
+  const headerRow = data[3] || [];
+  const headers = headerRow.map(h => String(h || '').trim()).filter(Boolean);
+  
+  const makeSelect = (id, label, defaultMatch, required=false) => {
+    const opts = (required ? '' : '<option value="">(skip)</option>') +
+      headers.map(h => '<option value="' + h + '" ' + (h.toLowerCase().includes(defaultMatch.toLowerCase()) ? 'selected' : '') + '>' + h + '</option>').join('');
+    return '<div style="margin-bottom:8px"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">' + label + (required ? ' *' : '') + '</label><select id="spimp_col_' + id + '" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px">' + opts + '</select></div>';
+  };
+  
+  showModal(`
+    <div style="max-width:700px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">📥 Import Shipment Schedule</h3>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Step 2 of 2 — Map columns from "${selected[0].sheet}". Detected ${headers.length} columns.</p>
+      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:11px;color:var(--text-muted);max-height:80px;overflow-y:auto">
+        <strong>Columns:</strong> ${headers.slice(0,20).map(h => '<span style="background:#e2e8f0;padding:1px 5px;border-radius:3px;margin:2px">' + h + '</span>').join(' ')}${headers.length > 20 ? ' ...' : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+        ${makeSelect('poNo', 'PO#', 'po#', true)}
+        ${makeSelect('jobNo', 'Job#', 'job')}
+        ${makeSelect('pgCode', 'PG Code', 'pg')}
+        ${makeSelect('nfItem', 'NF Item', 'nf item')}
+        ${makeSelect('nfLogo', 'NF Logo', 'nf logo')}
+        ${makeSelect('variable', 'Variable', 'variable')}
+        ${makeSelect('color', 'Color', 'color')}
+        ${makeSelect('outstandingQty', 'Outstanding Qty', 'outstanding')}
+        ${makeSelect('requestedDate', 'Requested Date', 'requested')}
+        ${makeSelect('completed', 'Completed', 'completed')}
+      </div>
+      <div style="margin-top:12px;padding:8px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;font-size:12px">
+        <strong>📅 Date Columns:</strong> Auto-detected columns with YYYY-MM-DD headers become shipment dates. Quantities become planned shipments.
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end">
+        <button class="btn btn-outline" onclick="showSpImportStep1()">← Back</button>
+        <button class="btn btn-success" onclick="confirmSpImport()">✓ Import</button>
+      </div>
+    </div>
+  `);
+  
+  window._spImportSelected = selected;
+  window._spImportData = data;
+}
+
+function confirmSpImport() {
+  const selected = window._spImportSelected || [];
+  const data = window._spImportData || [];
+  
+  const colMap = {};
+  ['poNo','jobNo','pgCode','nfItem','nfLogo','variable','color','outstandingQty','requestedDate','completed'].forEach(f => {
+    const el = document.getElementById('spimp_col_' + f);
+    if (el) colMap[f] = el.value;
+  });
+  
+  if (!colMap.poNo) { toast('PO# column is required', 'error'); return; }
+  
+  let totalImported = 0;
+  
+  selected.forEach(({ sheet, clientKey }) => {
+    if (!clientKey) return;
+    
+    const ws = _spImportWb.Sheets[sheet];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '', header: 1 });
+    
+    const headerRow = rows[3] || [];
+    const colIndices = {};
+    Object.keys(colMap).forEach(f => {
+      if (colMap[f]) {
+        colIndices[f] = headerRow.findIndex(h => String(h).trim() === colMap[f]);
+      }
+    });
+    
+    const dateCols = [];
+    headerRow.forEach((h, i) => {
+      if (/^\d{4}-\d{2}-\d{2}/.test(String(h))) {
+        dateCols.push({ col: i, date: String(h).substring(0, 10) });
+      }
+    });
+    
+    for (let i = 4; i < rows.length; i++) {
+      const row = rows[i];
+      const poNo = String(row[colIndices.poNo] || '').trim();
+      if (!poNo || poNo.toLowerCase() === 'total') continue;
       
-      // Header row is row 4 (index 3)
-      const headers = rows[3] || [];
+      const qty = parseFloat(String(row[colIndices.outstandingQty] || '0').replace(/[^0-9.-]/g, '')) || 0;
       
-      // Find column indices
-      const colMap = {
-        requestedShipDate: headers.findIndex(h => String(h).toLowerCase().includes('requested')),
-        jobNo: headers.findIndex(h => String(h).toLowerCase() === 'job#'),
-        poNo: headers.findIndex(h => String(h).toLowerCase() === 'po#'),
-        pgCode: headers.findIndex(h => String(h).toLowerCase().includes('pg code')),
-        variable: headers.findIndex(h => String(h).toLowerCase() === 'variable'),
-        nfItem: headers.findIndex(h => String(h).toLowerCase().includes('nf item')),
-        nfLogo: headers.findIndex(h => String(h).toLowerCase().includes('nf logo')),
-        color: headers.findIndex(h => String(h).toLowerCase() === 'color'),
-        outstandingQty: headers.findIndex(h => String(h).toLowerCase().includes('outstanding')),
-        completed: headers.findIndex(h => String(h).toLowerCase() === 'completed')
+      const plan = {
+        id: _spNextId++,
+        poNo,
+        jobNo: colIndices.jobNo >= 0 ? String(row[colIndices.jobNo] || '').trim() : '',
+        pgCode: colIndices.pgCode >= 0 ? String(row[colIndices.pgCode] || '').trim() : '',
+        itemCode: colIndices.nfItem >= 0 ? String(row[colIndices.nfItem] || '').trim() : '',
+        nfLogo: colIndices.nfLogo >= 0 ? String(row[colIndices.nfLogo] || '').trim() : '',
+        variable: colIndices.variable >= 0 ? String(row[colIndices.variable] || '').trim() : '',
+        color: colIndices.color >= 0 ? String(row[colIndices.color] || '').trim() : '',
+        qty,
+        completed: colIndices.completed >= 0 ? (parseFloat(row[colIndices.completed]) || 0) : 0,
+        orderDate: colIndices.requestedDate >= 0 ? parseSpDate(row[colIndices.requestedDate]) : '',
+        plannedShipments: [],
+        actualShipments: [],
+        notes: ''
       };
       
-      // Find date columns (columns with date-like headers)
-      const dateCols = [];
-      headers.forEach((h, i) => {
-        const hs = String(h);
-        // Match 2026-03-16 format
-        if (/^\d{4}-\d{2}-\d{2}/.test(hs)) {
-          dateCols.push({ col: i, date: hs.substring(0, 10) });
+      dateCols.forEach(dc => {
+        const shipQty = parseFloat(row[dc.col]) || 0;
+        if (shipQty > 0) {
+          plan.plannedShipments.push({ date: dc.date, qty: shipQty });
         }
       });
       
-      // Parse data rows starting from row 5 (index 4)
-      const plans = [];
-      for (let i = 4; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row[colMap.poNo] && !row[colMap.jobNo]) continue;
-        
-        const plan = {
-          id: _spNextId++,
-          poNo: String(row[colMap.poNo] || '').trim(),
-          jobNo: String(row[colMap.jobNo] || '').trim(),
-          pgCode: String(row[colMap.pgCode] || '').trim(),
-          variable: String(row[colMap.variable] || '').trim(),
-          itemCode: String(row[colMap.nfItem] || '').trim(),
-          nfLogo: String(row[colMap.nfLogo] || '').trim(),
-          color: String(row[colMap.color] || '').trim(),
-          qty: parseFloat(String(row[colMap.outstandingQty] || '0').replace(/^=/, '').replace(/[^0-9.-]/g, '')) || 0,
-          completed: parseFloat(row[colMap.completed]) || 0,
-          orderDate: colMap.requestedShipDate >= 0 ? parseExcelDate(row[colMap.requestedShipDate]) : '',
-          plannedShipments: [],
-          actualShipments: [],
-          notes: ''
-        };
-        
-        // Extract planned shipments from date columns
-        dateCols.forEach(dc => {
-          const qty = parseFloat(row[dc.col]) || 0;
-          if (qty > 0) {
-            plan.plannedShipments.push({ date: dc.date, qty: qty });
-          }
-        });
-        
-        // Calculate remaining
-        const plannedTotal = plan.plannedShipments.reduce((s, p) => s + p.qty, 0);
-        plan.qty = plan.qty || plannedTotal;
-        
-        if (plan.poNo || plan.itemCode) {
-          plans.push(plan);
-        }
-      }
-      
-      // Save to spPlans
       if (!spPlans[clientKey]) spPlans[clientKey] = [];
-      spPlans[clientKey] = [...spPlans[clientKey], ...plans];
-      saveSpPlans();
-      
-      document.getElementById('importModal').remove();
-      toast(`✓ Imported ${plans.length} plans`, 'success');
-      renderShipmentPlanner();
-      
-    } catch (err) {
-      console.error(err);
-      toast('Import failed: ' + err.message, 'error');
+      spPlans[clientKey].push(plan);
+      totalImported++;
     }
-  };
+  });
   
-  reader.readAsArrayBuffer(file);
+  saveSpPlans();
+  _spImportWb = null;
+  window._spImportSelected = null;
+  window._spImportData = null;
+  closeModal();
+  renderShipmentPlanner();
+  toast('Imported ' + totalImported + ' shipment plans', 'success');
 }
 
+function parseSpDate(val) {
+  if (!val) return '';
+  if (val instanceof Date) return val.toISOString().slice(0, 10);
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  return '';
+}
 function parseExcelDate(val) {
   if (!val) return '';
   if (typeof val === 'number') {
