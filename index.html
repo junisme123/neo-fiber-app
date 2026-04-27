@@ -10372,7 +10372,9 @@ function showAddSpPlan(clientKey, editPlan) {
       </div>
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Item Code</label>
-        <input id="spf_itemCode" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.itemCode||'')}" placeholder="e.g. NB-BC-001">
+        <select id="spf_itemCode" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="spfOnItemChange()">
+          <option value="">-- Select Item --</option>
+        </select>
       </div>
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">NF Spec</label>
@@ -10397,6 +10399,13 @@ function showAddSpPlan(clientKey, editPlan) {
     </div>
   </div>`;
   document.body.appendChild(modal);
+  
+  // For edit mode: populate item dropdown and set selected value
+  if (editPlan?.poNo && editPlan?.itemCode) {
+    spfOnPoChange();
+    const itemSel = document.getElementById('spf_itemCode');
+    if (itemSel) itemSel.value = editPlan.itemCode;
+  }
 }
 
 function closeSpModal() {
@@ -10411,22 +10420,61 @@ function showAddShipmentPlan() {
 }
 
 function spfOnPoChange() {
-  // Auto-fill from Order Status when PO is selected
+  // Populate item dropdown and auto-fill from Order Status when PO is selected
   const poNo = document.getElementById('spf_poNo')?.value;
   const sel = document.getElementById('sp_client');
   const ck = sel?.value || '';
-  if (!poNo || !ck) return;
+  const itemSel = document.getElementById('spf_itemCode');
+  if (!itemSel) return;
+  
+  // Clear and reset item dropdown
+  itemSel.innerHTML = '<option value="">-- Select Item --</option>';
+  
+  if (!poNo || !ck) {
+    // No PO selected - make it a text input fallback
+    return;
+  }
+  
   const orders = getClientOrders(ck) || [];
-  const order = orders.find(o => o.poNo === poNo);
+  const poOrders = orders.filter(o => o.poNo === poNo);
+  
+  // Populate item dropdown with unique items from this PO
+  const items = [...new Set(poOrders.map(o => o.itemCode).filter(Boolean))];
+  items.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item;
+    opt.textContent = item;
+    itemSel.appendChild(opt);
+  });
+  
+  // If only one item, auto-select it
+  if (items.length === 1) {
+    itemSel.value = items[0];
+    spfOnItemChange();
+  }
+}
+
+function spfOnItemChange() {
+  // Auto-fill other fields when item is selected
+  const poNo = document.getElementById('spf_poNo')?.value;
+  const itemCode = document.getElementById('spf_itemCode')?.value;
+  const sel = document.getElementById('sp_client');
+  const ck = sel?.value || '';
+  if (!poNo || !itemCode || !ck) return;
+  
+  const orders = getClientOrders(ck) || [];
+  const order = orders.find(o => o.poNo === poNo && o.itemCode === itemCode);
   if (!order) return;
-  if (order.itemCode && !document.getElementById('spf_itemCode')?.value)
-    document.getElementById('spf_itemCode').value = order.itemCode || '';
+  
+  // Auto-fill fields if empty
   if (order.nfSpec && !document.getElementById('spf_nfSpec')?.value)
     document.getElementById('spf_nfSpec').value = order.nfSpec || '';
   if (order.qty && !document.getElementById('spf_qty')?.value)
     document.getElementById('spf_qty').value = order.qty || '';
   if (order.unitPrice && !document.getElementById('spf_unitPrice')?.value)
     document.getElementById('spf_unitPrice').value = order.unitPrice || '';
+  if (order.orderDate && !document.getElementById('spf_orderDate')?.value)
+    document.getElementById('spf_orderDate').value = order.orderDate || '';
 }
 
 function saveSpPlan(clientKey, editId) {
