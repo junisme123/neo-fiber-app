@@ -10215,7 +10215,7 @@ function renderShipmentPlanner() {
   let allPlans = [];
   const clientsToScan = clientKey ? [clientKey] : Object.keys(spPlans);
   clientsToScan.forEach(ck => {
-    (spPlans[ck] || []).forEach(p => allPlans.push({ ...p, _clientKey: ck })));
+    (spPlans[ck] || []).forEach(p => allPlans.push({ ...p, _clientKey: ck }));
   });
 
   // Filter
@@ -10570,8 +10570,7 @@ function removeSpPlanShipment(clientKey, planId, idx, type) {
 function exportShipmentPlan() {
   loadSpPlans();
   let csv = '﻿'; // BOM
-  csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes
-';
+  csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes\n';
   Object.entries(spPlans).forEach(([ck, plans]) => {
     const clientLabel = (() => {
       if (ck.startsWith('custom_')) {
