@@ -3554,7 +3554,7 @@ async function downloadExcel() {
     let ctXml = await zip.file('[Content_Types].xml').async('string');
     for (const f of removedFiles) {
       // f is like 'xl/worksheets/sheet3.xml', CT uses '/xl/worksheets/sheet3.xml'
-      const partName = ('/' + f).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const partName = ('/' + f).replace(/[.*+?^${}()|[\]\\]/g, '\$&');
       ctXml = ctXml.replace(new RegExp(`<Override[^>]*PartName="${partName}"[^>]*/>`, 'g'), '');
     }
     // Also remove drawing3/drawing4 overrides if those drawings belong to removed sheets
@@ -6250,8 +6250,8 @@ function parsePoPdfLocal(text, filename, allPageItems) {
   // ── 4. Total Amount ────────────────────────────────────────────────────────────
   let totalAmount = 0;
   const amtPatterns = [
-    /(?:grand\s*total|total\s*amount|total\s*value|order\s*total|total\s*price|amount\s*due|total\s*usd|total\s*\(usd\))[:\s\$USD]*([\d,]+\.?\d*)/i,
-    /(?:total)[:\s\$]*([\d,]+\.\d{2})\s*(?:USD|$)/i,
+    /(?:grand\s*total|total\s*amount|total\s*value|order\s*total|total\s*price|amount\s*due|total\s*usd|total\s*\(usd\))[:\s$USD]*([\d,]+\.?\d*)/i,
+    /(?:total)[:\s$]*([\d,]+\.\d{2})\s*(?:USD|$)/i,
   ];
   for (const pat of amtPatterns) {
     const m = text.match(pat);
@@ -6554,7 +6554,7 @@ function _parsePoTableLines_UNUSED(text) {
 
     // Try to extract numbers from the line (qty, price, amount)
     // Numbers are right-aligned in columns, so use position-based extraction when possible
-    const numMatches = [...trimmed.matchAll(/[\$]?([\d,]+\.?\d*)/g)]
+    const numMatches = [...trimmed.matchAll(/[$]?([\d,]+\.?\d*)/g)]
       .map(m => ({ val: parseFloat(m[1].replace(/,/g,'')), raw: m[1] }))
       .filter(m => m.val > 0);
 
@@ -10204,6 +10204,12 @@ function initShipmentPlanner() {
 
 // ── Render ──────────────────────────────────────────────────────
 function renderShipmentPlanner() {
+  // Check view mode
+  if (spCurrentView === 'timeline') {
+    renderShipmentPlannerTimeline();
+    return;
+  }
+  
   loadSpPlans();
   const sel = document.getElementById('sp_client');
   const statusFilter = document.getElementById('sp_status')?.value || '';
@@ -10361,10 +10367,18 @@ function showAddSpPlan(clientKey, editPlan) {
   modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   modal.innerHTML = `<div style="background:white;border-radius:12px;padding:24px;width:600px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
     <h3 style="margin:0 0 20px;font-size:16px">${isEdit ? '✏️ Edit Shipment Plan' : '+ Add Shipment Plan'}</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">PO No.</label>
         ${poOptions ? `<select id="spf_poNo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="spfOnPoChange()">${poOptions}</select>` : `<input id="spf_poNo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.poNo||'')}" placeholder="e.g. KS-2026-001">`}
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Job#</label>
+        <input id="spf_jobNo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.jobNo||'')}" placeholder="e.g. J5049">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">PG Code</label>
+        <input id="spf_pgCode" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.pgCode||'')}" placeholder="e.g. ATSFI95">
       </div>
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Order Date</label>
@@ -10379,6 +10393,18 @@ function showAddSpPlan(clientKey, editPlan) {
         <select id="spf_itemCode" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" onchange="spfOnItemChange()">
           <option value="">-- Select Item --</option>
         </select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">NF Logo</label>
+        <input id="spf_nfLogo" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.nfLogo||'')}" placeholder="e.g. ABI95R-41">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Variable</label>
+        <input id="spf_variable" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.variable||'')}" placeholder="e.g. R, S, F5">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Color</label>
+        <input id="spf_color" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px" value="${escapeXml(editPlan?.color||'')}" placeholder="e.g. 透明, NF256">
       </div>
       <div>
         <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">NF Spec</label>
@@ -10484,9 +10510,14 @@ function spfOnItemChange() {
 function saveSpPlan(clientKey, editId) {
   if (!clientKey) { toast('No client selected', 'error'); return; }
   const poNo = document.getElementById('spf_poNo')?.value?.trim();
+  const jobNo = document.getElementById('spf_jobNo')?.value?.trim() || '';
+  const pgCode = document.getElementById('spf_pgCode')?.value?.trim() || '';
   const orderDate = document.getElementById('spf_orderDate')?.value?.trim() || '';
   const shipmentDate = document.getElementById('spf_shipmentDate')?.value?.trim() || '';
   const itemCode = document.getElementById('spf_itemCode')?.value?.trim() || '';
+  const nfLogo = document.getElementById('spf_nfLogo')?.value?.trim() || '';
+  const variable = document.getElementById('spf_variable')?.value?.trim() || '';
+  const color = document.getElementById('spf_color')?.value?.trim() || '';
   const nfSpec = document.getElementById('spf_nfSpec')?.value?.trim() || '';
   const qty = parseFloat(document.getElementById('spf_qty')?.value) || 0;
   const unitPrice = parseFloat(document.getElementById('spf_unitPrice')?.value) || 0;
@@ -10494,7 +10525,7 @@ function saveSpPlan(clientKey, editId) {
 
   if (!poNo) { toast('PO No. is required', 'error'); return; }
 
-  const plan = { poNo, orderDate, shipmentDate, itemCode, nfSpec, qty, unitPrice, notes, plannedShipments: [], actualShipments: [] };
+  const plan = { poNo, jobNo, pgCode, orderDate, shipmentDate, itemCode, nfLogo, variable, color, nfSpec, qty, unitPrice, notes, plannedShipments: [], actualShipments: [] };
 
   if (editId !== null) {
     const plans = spPlans[clientKey] || [];
@@ -10655,6 +10686,298 @@ function downloadBlob(content, mimeType, filename) {
   URL.revokeObjectURL(url);
 }
 
+// Shipment Planner view state
+let spCurrentView = 'list';
+
+function setSpView(view) {
+  spCurrentView = view;
+  document.getElementById('sp_viewList').style.background = view === 'list' ? 'var(--primary)' : 'transparent';
+  document.getElementById('sp_viewList').style.color = view === 'list' ? 'white' : 'inherit';
+  document.getElementById('sp_viewTimeline').style.background = view === 'timeline' ? 'var(--primary)' : 'transparent';
+  document.getElementById('sp_viewTimeline').style.color = view === 'timeline' ? 'white' : 'inherit';
+  renderShipmentPlanner();
+}
+
+function renderShipmentPlannerTimeline() {
+  loadSpPlans();
+  const ck = document.getElementById('sp_client')?.value || '';
+  const status = document.getElementById('sp_status')?.value || '';
+  const fromMonth = document.getElementById('sp_fromMonth')?.value || '';
+  const toMonth = document.getElementById('sp_toMonth')?.value || '';
+  
+  // Gather all plans
+  let allPlans = [];
+  Object.entries(spPlans).forEach(([clientKey, plans]) => {
+    if (ck && ck !== clientKey) return;
+    const clientLabel = (() => {
+      if (clientKey.startsWith('custom_')) {
+        const cc = customClients.find(c => 'custom_' + c.code === clientKey);
+        return cc?.label || cc?.name || clientKey;
+      }
+      return CLIENT_CONFIGS[clientKey]?.label || clientKey;
+    })();
+    (plans || []).forEach(p => {
+      allPlans.push({ ...p, _clientKey: clientKey, _clientLabel: clientLabel });
+    });
+  });
+  
+  // Filter by status
+  if (status) {
+    allPlans = allPlans.filter(p => computeSpStatus(p) === status);
+  }
+  
+  // Get unique shipment dates (from plannedShipments and shipmentDate)
+  const dateSet = new Set();
+  allPlans.forEach(p => {
+    if (p.shipmentDate) dateSet.add(p.shipmentDate);
+    if (p.orderDate) dateSet.add(p.orderDate);
+    (p.plannedShipments || []).forEach(s => { if (s.date) dateSet.add(s.date); });
+    (p.actualShipments || []).forEach(s => { if (s.date) dateSet.add(s.date); });
+  });
+  
+  // Sort dates and filter by month range
+  let dates = [...dateSet].filter(d => d).sort();
+  if (fromMonth) {
+    const fromStart = fromMonth + '-01';
+    dates = dates.filter(d => d >= fromStart);
+  }
+  if (toMonth) {
+    const toEnd = toMonth + '-31';
+    dates = dates.filter(d => d <= toEnd);
+  }
+  
+  // Limit to next 12 weeks
+  const today = new Date().toISOString().slice(0, 10);
+  const futureLimit = new Date(Date.now() + 84 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  dates = dates.filter(d => d >= today && d <= futureLimit);
+  if (dates.length > 12) dates = dates.slice(0, 12);
+  
+  // Build timeline table
+  const wrapper = document.getElementById('sp_tableWrapper');
+  if (!dates.length) {
+    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px">No upcoming shipments in the next 12 weeks</div>';
+    return;
+  }
+  
+  let html = '<table class="table" style="font-size:12px;white-space:nowrap"><thead><tr>';
+  html += '<th style="position:sticky;left:0;background:var(--card);z-index:2">PO / Item</th>';
+  html += '<th style="position:sticky;left:120px;background:var(--card);z-index:2">Total</th>';
+  dates.forEach(d => {
+    const date = new Date(d);
+    const day = date.getDate();
+    const month = date.toLocaleString('en', {month: 'short'});
+    html += `<th style="min-width:50px;text-align:center">${month}<br>${day}</th>`;
+  });
+  html += '</tr></thead><tbody>';
+  
+  allPlans.forEach(p => {
+    html += '<tr>';
+    html += `<td style="position:sticky;left:0;background:var(--card);z-index:1;max-width:120px;overflow:hidden;text-overflow:ellipsis" title="${p.poNo||''} - ${p.itemCode||''}">`;
+    html += `<div style="font-weight:600">${p.poNo||''}</div>`;
+    html += `<div style="font-size:11px;opacity:0.7">${p.itemCode||''}</div>`;
+    html += '</td>';
+    html += `<td style="position:sticky;left:120px;background:var(--card);z-index:1">${p.qty||0}</td>`;
+    
+    dates.forEach(d => {
+      // Check if this date has a shipment
+      const planned = (p.plannedShipments || []).find(s => s.date === d);
+      const actual = (p.actualShipments || []).find(s => s.date === d);
+      const isShipmentDate = p.shipmentDate === d;
+      
+      let cell = '';
+      let bgColor = '';
+      let title = '';
+      
+      if (actual) {
+        cell = actual.qty || 0;
+        bgColor = 'background:#10b981;color:white';
+        title = `Shipped: ${actual.qty}${actual.invoiceNo ? ' INV: ' + actual.invoiceNo : ''}`;
+      } else if (planned) {
+        cell = planned.qty || 0;
+        bgColor = 'background:#f59e0b;color:white';
+        title = `Planned: ${planned.qty}`;
+      } else if (isShipmentDate) {
+        bgColor = 'background:#3b82f6;color:white';
+        title = 'Shipment Date';
+        cell = '📅';
+      }
+      
+      html += `<td style="text-align:center;${bgColor}" title="${title}">${cell}</td>`;
+    });
+    
+    html += '</tr>';
+  });
+  
+  html += '</tbody></table>';
+  html += '<div style="display:flex;gap:16px;margin-top:12px;font-size:12px">';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;background:#3b82f6;border-radius:2px;margin-right:4px"></span>Shipment Date</span>';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;background:#f59e0b;border-radius:2px;margin-right:4px"></span>Planned</span>';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;background:#10b981;border-radius:2px;margin-right:4px"></span>Shipped</span>';
+  html += '</div>';
+  
+  wrapper.innerHTML = html;
+}
+
+// Import Shipment Schedule from Excel
+function showImportModal() {
+  const modal = document.createElement('div');
+  modal.id = 'importModal';
+  modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `<div style="background:white;border-radius:12px;padding:24px;width:500px;max-width:95vw">
+    <h3 style="margin:0 0:16px;font-size:16px">📥 Import Shipment Schedule</h3>
+    <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">
+      Import from Excel shipment schedule. Expected format:<br>
+      • Row 4: Headers (PO#, NF Item, date columns like 2026-03-16)<br>
+      • Row 5+: Data rows with shipment quantities in date columns
+    </p>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Client</label>
+      <select id="import_client" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <option value="">-- Select Client --</option>
+      </select>
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Excel File</label>
+      <input type="file" id="import_file" accept=".xlsx,.xls" class="form-control" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="document.getElementById('importModal').remove()">Cancel</button>
+      <button class="btn btn-primary" onclick="importShipmentSchedule()">Import</button>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  
+  // Populate client dropdown
+  const sel = document.getElementById('import_client');
+  Object.keys(CLIENT_CONFIGS).forEach(k => {
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = CLIENT_CONFIGS[k].label || k;
+    sel.appendChild(opt);
+  });
+  customClients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = 'custom_' + c.code;
+    opt.textContent = c.label || c.name;
+    sel.appendChild(opt);
+  });
+}
+
+async function importShipmentSchedule() {
+  const clientKey = document.getElementById('import_client')?.value;
+  if (!clientKey) { toast('Please select a client', 'error'); return; }
+  
+  const fileInput = document.getElementById('import_file');
+  if (!fileInput.files.length) { toast('Please select a file', 'error'); return; }
+  
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  
+  reader.onload = async (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      
+      // Header row is row 4 (index 3)
+      const headers = rows[3] || [];
+      
+      // Find column indices
+      const colMap = {
+        requestedShipDate: headers.findIndex(h => String(h).toLowerCase().includes('requested')),
+        jobNo: headers.findIndex(h => String(h).toLowerCase() === 'job#'),
+        poNo: headers.findIndex(h => String(h).toLowerCase() === 'po#'),
+        pgCode: headers.findIndex(h => String(h).toLowerCase().includes('pg code')),
+        variable: headers.findIndex(h => String(h).toLowerCase() === 'variable'),
+        nfItem: headers.findIndex(h => String(h).toLowerCase().includes('nf item')),
+        nfLogo: headers.findIndex(h => String(h).toLowerCase().includes('nf logo')),
+        color: headers.findIndex(h => String(h).toLowerCase() === 'color'),
+        outstandingQty: headers.findIndex(h => String(h).toLowerCase().includes('outstanding')),
+        completed: headers.findIndex(h => String(h).toLowerCase() === 'completed')
+      };
+      
+      // Find date columns (columns with date-like headers)
+      const dateCols = [];
+      headers.forEach((h, i) => {
+        const hs = String(h);
+        // Match 2026-03-16 format
+        if (/^\d{4}-\d{2}-\d{2}/.test(hs)) {
+          dateCols.push({ col: i, date: hs.substring(0, 10) });
+        }
+      });
+      
+      // Parse data rows starting from row 5 (index 4)
+      const plans = [];
+      for (let i = 4; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row[colMap.poNo] && !row[colMap.jobNo]) continue;
+        
+        const plan = {
+          id: _spNextId++,
+          poNo: String(row[colMap.poNo] || '').trim(),
+          jobNo: String(row[colMap.jobNo] || '').trim(),
+          pgCode: String(row[colMap.pgCode] || '').trim(),
+          variable: String(row[colMap.variable] || '').trim(),
+          itemCode: String(row[colMap.nfItem] || '').trim(),
+          nfLogo: String(row[colMap.nfLogo] || '').trim(),
+          color: String(row[colMap.color] || '').trim(),
+          qty: parseFloat(String(row[colMap.outstandingQty] || '0').replace(/^=/, '').replace(/[^0-9.-]/g, '')) || 0,
+          completed: parseFloat(row[colMap.completed]) || 0,
+          orderDate: colMap.requestedShipDate >= 0 ? parseExcelDate(row[colMap.requestedShipDate]) : '',
+          plannedShipments: [],
+          actualShipments: [],
+          notes: ''
+        };
+        
+        // Extract planned shipments from date columns
+        dateCols.forEach(dc => {
+          const qty = parseFloat(row[dc.col]) || 0;
+          if (qty > 0) {
+            plan.plannedShipments.push({ date: dc.date, qty: qty });
+          }
+        });
+        
+        // Calculate remaining
+        const plannedTotal = plan.plannedShipments.reduce((s, p) => s + p.qty, 0);
+        plan.qty = plan.qty || plannedTotal;
+        
+        if (plan.poNo || plan.itemCode) {
+          plans.push(plan);
+        }
+      }
+      
+      // Save to spPlans
+      if (!spPlans[clientKey]) spPlans[clientKey] = [];
+      spPlans[clientKey] = [...spPlans[clientKey], ...plans];
+      saveSpPlans();
+      
+      document.getElementById('importModal').remove();
+      toast(`✓ Imported ${plans.length} plans`, 'success');
+      renderShipmentPlanner();
+      
+    } catch (err) {
+      console.error(err);
+      toast('Import failed: ' + err.message, 'error');
+    }
+  };
+  
+  reader.readAsArrayBuffer(file);
+}
+
+function parseExcelDate(val) {
+  if (!val) return '';
+  if (typeof val === 'number') {
+    // Excel date serial number
+    const date = new Date((val - 25569) * 86400 * 1000);
+    return date.toISOString().slice(0, 10);
+  }
+  const s = String(val);
+  // Already in YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  return '';
+}
+
 
 
 </script>
@@ -10693,7 +11016,12 @@ function downloadBlob(content, mimeType, filename) {
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">TO MONTH</label>
           <input type="month" id="sp_toMonth" onchange="renderShipmentPlanner()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
-        <div style="margin-left:auto;display:flex;gap:8px">
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+            <button id="sp_viewList" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:var(--primary);color:white" onclick="setSpView('list')">List</button>
+            <button id="sp_viewTimeline" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:transparent" onclick="setSpView('timeline')">Timeline</button>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="showImportModal()">📥 Import</button>
           <button class="btn btn-primary btn-sm" onclick="showAddShipmentPlan()">+ Add Plan</button>
           <button class="btn btn-outline btn-sm" onclick="exportShipmentPlan()">⬇ Export CSV</button>
         </div>
