@@ -6093,6 +6093,20 @@ async function handlePoPdfUpload(event) {
     // Extract text from PDF with x/y coordinates for each text item
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    // Extract PDF metadata (Title often contains PO# for Brightpearl/Oracle Reports)
+    let pdfMeta = {};
+    try {
+      const meta = await pdf.getMetadata();
+      if (meta && meta.info) {
+        pdfMeta = {
+          title: meta.info.Title || '',
+          author: meta.info.Author || '',
+          subject: meta.info.Subject || '',
+          creator: meta.info.Creator || '',
+          producer: meta.info.Producer || ''
+        };
+      }
+    } catch(e) { /* no metadata */ }
     let allPageItems = []; // [{x, y, str, pageWidth}]
     let fullText = '';
     for (let i = 1; i <= Math.min(pdf.numPages, 10); i++) {
@@ -6150,7 +6164,7 @@ async function handlePoPdfUpload(event) {
     }
 
     // Fallback: local rule engine using x-coordinate based table extraction
-    const parsed = parsePoPdfLocal(fullText, file.name, allPageItems);
+    const parsed = parsePoPdfLocal(fullText, file.name, allPageItems, pdfMeta);
     statusEl.textContent = '';
     showPoConfirmDialog(parsed, file.name);
 
@@ -6164,12 +6178,48 @@ async function handlePoPdfUpload(event) {
 // ============================================================
 // LOCAL PO RULE ENGINE (No API Key Required)
 // ============================================================
-function parsePoPdfLocal(text, filename, allPageItems) {
+function parsePoPdfLocal(text, filename, allPageItems, pdfMeta) {
   const textLower = text.toLowerCase();
   let confidence = 0;
 
   // ── 1. PO Number ────────────────────────────────────────────────────────────
   let poNo = '';
+  // 1a. Try PDF metadata Title first (Brightpearl, Oracle Reports embed PO# here)
+  if (pdfMeta && pdfMeta.title) {
+    const metaPatterns = [
+      /(?:P\.?O\.?\s*(?:NUMBER|NO\.?|#|NUM)[:\s]+)([A-Z0-9][A-Z0-9\-\/\.]{2,30})/i,
+      /(?:PURCHASE\s+ORDER\s*(?:NO\.?|#|NUMBER)?[:\s]+)([A-Z0-9][A-Z0-9\-\/\.]{2,30})/i,
+      /(?:ORDER\s*(?:NO\.?|#|NUMBER)[:\s]+)([A-Z0-9][A-Z0-9\-\/\.]{2,30})/i,
+    ];
+    for (const pat of metaPatterns) {
+      const m = pdfMeta.title.match(pat);
+      if (m) { poNo = m[1].trim(); confidence += 0.3; break; }
+    }
+    // Metadata title might be the PO# itself (pure number or code)
+    if (!poNo && /^[A-Z0-9][A-Z0-9\-\/\.]{2,30}$/i.test(pdfMeta.title.trim())) {
+      poNo = pdfMeta.title.trim();
+      confidence += 0.2;
+    }
+  }
+  // 1b. Try filename extraction as fallback (before expensive text regex)
+  if (!poNo && filename) {
+    const fn = filename.replace(/\.pdf$/i, '').trim();
+    // Pattern: E502_26-00678 (letter_prefix-number format)
+    const fnPat1 = fn.match(/^([A-Z]\d{2,}[_\-]\d{2,}[_\-]\d{3,}[A-Z0-9\-]*)/i);
+    if (fnPat1) { poNo = fnPat1[1].trim(); confidence += 0.15; }
+    // Pattern: pure number like "1039607 251125" -> take first number group
+    if (!poNo) {
+      const fnPat2 = fn.match(/^(\d{5,})\b/);
+      if (fnPat2) { poNo = fnPat2[1]; confidence += 0.1; }
+    }
+    // Pattern: "NEO 182642 TT JAPAN 761144 260420" -> last 6+ digit number
+    if (!poNo) {
+      const nums = [...fn.matchAll(/\b(\d{6,})\b/g)];
+      if (nums.length >= 2) { poNo = nums[nums.length - 1][1]; confidence += 0.1; }
+      else if (nums.length === 1) { poNo = nums[0][1]; confidence += 0.1; }
+    }
+  }
+  // 1c. Text-based regex patterns (original logic)
   const poPatterns = [
     /(?:P\.?O\.?\s*(?:NUMBER|NO\.?|#|NUM)[:\s]+)([A-Z0-9][A-Z0-9\-\/\.]{2,30})/i,
     /(?:PURCHASE\s+ORDER\s*(?:NO\.?|#|NUMBER)?[:\s]+)([A-Z0-9][A-Z0-9\-\/\.]{2,30})/i,
