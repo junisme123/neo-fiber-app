@@ -10803,7 +10803,8 @@ function getOrderQty(plan) {
 function getOutstanding(plan) {
   const orderQty = getOrderQty(plan);
   const shipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
-  return Math.max(0, orderQty - shipped);
+  const planned = (plan.plannedShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+  return Math.max(0, orderQty - shipped - planned);
 }
 
 function renderShipmentPlannerTimeline() {
@@ -11389,9 +11390,43 @@ function tlAddDateConfirm() {
 function tlSyncToOrder(clientKey, plan) {
   if (!clientKey || !plan) return;
   const allOrders = loadOrderStatus();
-  const clientOrders = allOrders[clientKey] || [];
-  const order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
-  if (!order) { console.log('tlSyncToOrder: no matching order for', plan.poNo, plan.itemCode); return; }
+  if (!allOrders[clientKey]) allOrders[clientKey] = [];
+  const clientOrders = allOrders[clientKey];
+  let order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
+  if (!order) {
+    order = {
+      poNo: plan.poNo || '',
+      itemCode: plan.itemCode || '',
+      jobNo: plan.jobNo || '',
+      pgCode: plan.pgCode || '',
+      nfItem: plan.nfItem || '',
+      nfLogo: plan.nfLogo || '',
+      variable: plan.variable || '',
+      color: plan.color || '',
+      qty: plan.qty || getOrderQty(plan) || 0,
+      unitPrice: 0,
+      amount: 0,
+      currency: 'USD',
+      outstandingQty: getOutstanding(plan),
+      completed: (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0),
+      poStatus: 'open',
+      deliveryDate: '',
+      plannedShipDate: '',
+      shipments: [],
+      stockOnHand: 0,
+      createdAt: new Date().toISOString()
+    };
+    clientOrders.push(order);
+    console.log('tlSyncToOrder: auto-created order for', plan.poNo, plan.itemCode);
+  }
+  // Sync fields from plan if order fields are empty
+  if ((!order.qty || parseFloat(order.qty) === 0) && plan.qty) order.qty = plan.qty;
+  if (!order.jobNo && plan.jobNo) order.jobNo = plan.jobNo;
+  if (!order.pgCode && plan.pgCode) order.pgCode = plan.pgCode;
+  if (!order.nfItem && plan.nfItem) order.nfItem = plan.nfItem;
+  if (!order.nfLogo && plan.nfLogo) order.nfLogo = plan.nfLogo;
+  if (!order.variable && plan.variable) order.variable = plan.variable;
+  if (!order.color && plan.color) order.color = plan.color;
 
   const totalShippedFromPlanner = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
   order.stockOnHand = Math.max(0, (parseFloat(order.qty)||0) - totalShippedFromPlanner);
@@ -11455,9 +11490,36 @@ function syncAllPlansToOrders() {
   Object.keys(spPlans).forEach(clientKey => {
     const plans = spPlans[clientKey] || [];
     plans.forEach(plan => {
-      const clientOrders = allOrders[clientKey] || [];
-      const order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
-      if (!order) return;
+      if (!allOrders[clientKey]) allOrders[clientKey] = [];
+      const clientOrders = allOrders[clientKey];
+      let order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
+      if (!order) {
+        order = {
+          poNo: plan.poNo || '',
+          itemCode: plan.itemCode || '',
+          jobNo: plan.jobNo || '',
+          pgCode: plan.pgCode || '',
+          nfItem: plan.nfItem || '',
+          nfLogo: plan.nfLogo || '',
+          variable: plan.variable || '',
+          color: plan.color || '',
+          qty: plan.qty || 0,
+          unitPrice: 0, amount: 0, currency: 'USD',
+          outstandingQty: 0, completed: 0,
+          poStatus: 'open', deliveryDate: '', plannedShipDate: '',
+          shipments: [], stockOnHand: 0,
+          createdAt: new Date().toISOString()
+        };
+        clientOrders.push(order);
+        console.log('syncAll: auto-created order for', plan.poNo, plan.itemCode);
+      }
+      if ((!order.qty || parseFloat(order.qty) === 0) && plan.qty) order.qty = plan.qty;
+      if (!order.jobNo && plan.jobNo) order.jobNo = plan.jobNo;
+      if (!order.pgCode && plan.pgCode) order.pgCode = plan.pgCode;
+      if (!order.nfItem && plan.nfItem) order.nfItem = plan.nfItem;
+      if (!order.nfLogo && plan.nfLogo) order.nfLogo = plan.nfLogo;
+      if (!order.variable && plan.variable) order.variable = plan.variable;
+      if (!order.color && plan.color) order.color = plan.color;
       syncCount++;
 
       // Update stockOnHand
