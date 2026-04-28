@@ -6850,8 +6850,7 @@ function showPoConfirmDialog(parsed, filename) {
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
         <div>
-          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number ${parsed.poNo ? '' : '<span style="color:var(--warning)">(未识别，请手动输入)</span>'}</label>
-          ${parsed.poNo ? '' : '<button type="button" onclick="document.getElementById('po_confirm_poNo').focus()" style="margin-bottom:4px;padding:3px 8px;background:var(--warning);border:none;border-radius:4px;font-size:10px;cursor:pointer;color:#000">🔧 手动输入</button>'}
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
           <input type="text" id="po_confirm_poNo" value="${escapeXml(parsed.poNo||'')}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
         </div>
         <div>
@@ -6984,6 +6983,12 @@ function updatePoPaymentDate() {
 
 function confirmPoImport() {
   const poNo = document.getElementById('po_confirm_poNo')?.value?.trim() || '';
+  // 验证 PO 号，如果为空显示提示
+  if (!poNo) {
+    showToast('⚠️ 请输入 PO 订单号', 'warning');
+    document.getElementById('po_confirm_poNo').focus();
+    return;
+  }
   const clientKey = document.getElementById('po_confirm_client')?.value || '';
   const shipDate = document.getElementById('po_confirm_shipDate')?.value || '';
   const payDate = document.getElementById('po_confirm_payDate')?.value || '';
