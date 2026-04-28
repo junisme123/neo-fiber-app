@@ -10790,6 +10790,20 @@ function spDeleteAll() {
   renderShipmentPlanner();
 }
 
+// ── Global helpers for Timeline ──
+function getOrderQty(plan) {
+  const ck2 = plan._clientKey;
+  if (!ck2) return parseFloat(plan.qty)||0;
+  const orders = getClientOrders(ck2) || [];
+  const o = orders.find(x => x.poNo === plan.poNo && x.itemCode === plan.itemCode);
+  return o ? (parseFloat(o.qty)||0) : (parseFloat(plan.qty)||0);
+}
+function getOutstanding(plan) {
+  const orderQty = getOrderQty(plan);
+  const shipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+  return Math.max(0, orderQty - shipped);
+}
+
 function renderShipmentPlannerTimeline() {
   loadSpPlans();
   const ck = (document.getElementById('sp_client')||{}).value||'';
@@ -10825,18 +10839,7 @@ function renderShipmentPlannerTimeline() {
   }
 
   // Helper: get order qty from Order Status
-  function getOrderQty(plan) {
-    const ck2 = plan._clientKey;
-    if (!ck2) return parseFloat(plan.qty)||0;
-    const orders = getClientOrders(ck2) || [];
-    const o = orders.find(x => x.poNo === plan.poNo && x.itemCode === plan.itemCode);
-    return o ? (parseFloat(o.qty)||0) : (parseFloat(plan.qty)||0);
-  }
-  function getOutstanding(plan) {
-    const orderQty = getOrderQty(plan);
-    const shipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
-    return Math.max(0, orderQty - shipped);
-  }
+
 
   // Today
   const today = new Date();
@@ -10858,19 +10861,19 @@ function renderShipmentPlannerTimeline() {
   h += '.tl-sticky{position:sticky;z-index:4;background:inherit}';
   h += '.tl-sticky-l0{left:0}.tl-sticky-l1{left:100px}.tl-sticky-l2{left:160px}.tl-sticky-l3{left:220px}.tl-sticky-l4{left:300px}.tl-sticky-l5{left:375px}.tl-sticky-l6{left:450px}';
   h += '.tl-head-month{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:#93c5fd;padding:8px 6px;font-size:12px;font-weight:700;text-align:center;letter-spacing:0.5px}';
-  h += '.tl-head-date{background:#f1f5f9;padding:6px 2px;text-align:center;font-size:10px;font-weight:600;color:#475569;cursor:pointer;transition:background 0.15s}';
-  h += '.tl-head-date:hover{background:#dbeafe}';
+  h += '.tl-head-date{background:#f8fafc;padding:6px 3px;text-align:center;font-size:10px;font-weight:600;color:#475569;cursor:pointer;transition:all 0.15s;border-bottom:2px solid transparent}';
+  h += '.tl-head-date:hover{background:#dbeafe;border-bottom-color:#3b82f6}';
   h += '.tl-head-date.tl-today{background:#3b82f6;color:white;border-radius:0}';
   h += '.tl-head-date.tl-weekend{background:#fef2f2;color:#991b1b}';
   h += '.tl-head-date.tl-today.tl-weekend{background:#3b82f6;color:white}';
   h += '.tl-head-plus{background:#f1f5f9;padding:4px;text-align:center;cursor:pointer;color:#3b82f6;font-size:16px;font-weight:400;transition:background 0.15s}';
   h += '.tl-head-plus:hover{background:#dbeafe}';
-  h += '.tl-cell{text-align:center;padding:4px 2px;font-size:11px;cursor:pointer;transition:all 0.12s;min-width:44px}';
-  h += '.tl-cell:hover{outline:2px solid #3b82f6;outline-offset:-2px;z-index:1;position:relative}';
-  h += '.tl-cell-planned{background:#fef3c7;color:#92400e;font-weight:600}';
-  h += '.tl-cell-actual{background:#dcfce7;color:#166534;font-weight:700}';
-  h += '.tl-cell-empty{color:#cbd5e1;cursor:pointer}';
-  h += '.tl-cell-empty:hover{background:#eff6ff;color:#3b82f6;font-size:14px;font-weight:700}';
+  h += '.tl-cell{text-align:center;padding:5px 4px;font-size:11px;cursor:pointer;transition:all 0.15s;min-width:46px;border-radius:4px}';
+  h += '.tl-cell:hover{outline:2px solid #3b82f6;outline-offset:-2px;z-index:2;position:relative;box-shadow:0 0 0 1px rgba(59,130,246,0.3)}';
+  h += '.tl-cell-planned{background:#fef3c7;color:#92400e;font-weight:700;border-radius:4px}';
+  h += '.tl-cell-actual{background:#dcfce7;color:#166534;font-weight:700;border-radius:4px}';
+  h += '.tl-cell-empty{color:#94a3b8;cursor:pointer;font-size:13px}';
+  h += '.tl-cell-empty:hover{background:#dbeafe;color:#2563eb;font-size:14px;font-weight:700;outline:2px solid #3b82f6;outline-offset:-2px}';
   h += '.tl-info{font-size:10px;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px;background:inherit}';
   h += '.tl-info-po{font-weight:700;color:#1e40af;min-width:100px;max-width:100px;left:0}';
   h += '.tl-info-sm{font-size:10px;color:#64748b;min-width:60px;max-width:60px}';
@@ -10962,7 +10965,7 @@ function renderShipmentPlannerTimeline() {
       else if (planned&&planned.qty) { qty=planned.qty; cellCls='tl-cell tl-cell-planned'; title='Planned: '+qty+' \u2014 click to edit'; type='planned'; }
       const todayBorder = isToday ? 'border-left:2px solid #3b82f6;border-right:2px solid #3b82f6;' : '';
       const clickHandler = qty > 0 ? ' onclick="tlEditCell(\'' + ck2.replace(/'/g,"\\'") + '\',' + pid + ',\'' + d + '\',\'' + type + '\')"' : ' onclick="tlQuickAddCell(\'' + ck2.replace(/'/g,"\\'") + '\',' + pid + ',\'' + d + '\')"';
-      h += '<td class="' + cellCls + '" style="' + todayBorder + '"' + clickHandler + ' title="' + title + '">' + (qty > 0 ? qty : '+ ') + '</td>';
+      h += '<td class="' + cellCls + '" style="' + todayBorder + '"' + clickHandler + ' title="' + title + '">' + (qty > 0 ? '<b>' + qty + '</b>' : '<span style="font-size:15px;opacity:0.4">+</span>') + '</td>';
     });
 
     h += '<td></td>'; // +Date alignment
@@ -11142,7 +11145,9 @@ function tlAddPlanForDateConfirm(clientKey, date) {
 function tlQuickAddCell(clientKey, planId, date) {
   const plans = spPlans[clientKey] || [];
   const plan = plans.find(p => p.id === planId);
-  if (!plan) return;
+  if (!plan) { console.warn('tlQuickAddCell: plan not found', clientKey, planId); return; }
+  // Ensure _clientKey is set for getOrderQty
+  if (!plan._clientKey) plan._clientKey = clientKey;
 
   const orderQty = getOrderQty(plan);
   const totalShipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
@@ -11193,6 +11198,8 @@ function tlQuickAddCellConfirm(clientKey, planId, date) {
   const plans = spPlans[clientKey] || [];
   const plan = plans.find(p => p.id === planId);
   if (!plan) return;
+  // Ensure _clientKey is set for getOrderQty
+  if (!plan._clientKey) plan._clientKey = clientKey;
 
   const qty = parseFloat(document.getElementById('tlqa_qty')?.value) || 0;
   const type = document.getElementById('tlqa_type')?.value || 'planned';
@@ -11222,6 +11229,7 @@ function tlEditCell(clientKey, planId, date, type) {
   const plans = spPlans[clientKey] || [];
   const plan = plans.find(p => p.id === planId);
   if (!plan) return;
+  if (!plan._clientKey) plan._clientKey = clientKey;
 
   const arr = type === 'actual' ? (plan.actualShipments||[]) : (plan.plannedShipments||[]);
   const existing = arr.find(s => s.date === date);
