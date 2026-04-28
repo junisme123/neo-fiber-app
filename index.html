@@ -10543,6 +10543,8 @@ function saveSpPlan(clientKey, editId) {
     toast('✓ Plan added', 'success');
   }
   saveSpPlans();
+  // Sync to Order Status: update ship dates + shipments
+  tlSyncToOrder(clientKey, plan);
   closeSpModal();
   renderShipmentPlanner();
 }
@@ -11413,11 +11415,100 @@ function tlSyncToOrder(clientKey, plan) {
   if (totalShipped >= (parseFloat(order.qty)||0) && totalShipped > 0) order.poStatus = 'complete';
   else if (totalShipped > 0) order.poStatus = 'partial';
 
-  const plannedShips = order.shipments.filter(s => s.status === 'Planned');
-  if (plannedShips.length) order.plannedShipDate = plannedShips.map(s => s.shipDate).sort().pop();
+  // Update deliveryDate: earliest actual ship date, else earliest planned ship date
+  const actualShips = order.shipments.filter(s => s.status === 'Shipped' && s.shipDate);
+  const plannedShips = order.shipments.filter(s => s.status === 'Planned' && s.shipDate);
+  if (actualShips.length) {
+    order.deliveryDate = actualShips.map(s => s.shipDate).sort()[0];
+  } else if (plannedShips.length) {
+    order.deliveryDate = plannedShips.map(s => s.shipDate).sort()[0];
+  }
+
+  // Update plannedShipDate: earliest future planned ship date
+  const today = new Date().toISOString().substring(0, 10);
+  const futurePlanned = plannedShips.filter(s => s.shipDate >= today);
+  if (futurePlanned.length) {
+    order.plannedShipDate = futurePlanned.map(s => s.shipDate).sort()[0];
+  } else if (plannedShips.length) {
+    order.plannedShipDate = plannedShips.map(s => s.shipDate).sort()[0];
+  }
+
+  // If no shipments at all, clear the dates
+  if (!actualShips.length && !plannedShips.length) {
+    order.deliveryDate = '';
+    order.plannedShipDate = '';
+  }
 
   allOrders[clientKey] = clientOrders;
   saveOrderStatus(allOrders);
+}
+
+// Batch sync all plans to orders for ALL clients
+function doSyncAllPlansToOrders() {
+  const count = syncAllPlansToOrders();
+  toast('\u2705 Synced ' + count + ' plans to Order Status (all clients)', 'success');
+}
+
+function syncAllPlansToOrders() {
+  const allOrders = loadOrderStatus();
+  let syncCount = 0;
+  Object.keys(spPlans).forEach(clientKey => {
+    const plans = spPlans[clientKey] || [];
+    plans.forEach(plan => {
+      const clientOrders = allOrders[clientKey] || [];
+      const order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
+      if (!order) return;
+      syncCount++;
+
+      // Update stockOnHand
+      const totalShipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+      order.stockOnHand = Math.max(0, (parseFloat(order.qty)||0) - totalShipped);
+
+      // Update shipments
+      if (!order.shipments) order.shipments = [];
+      const actualDates = (plan.actualShipments||[]).map(s => s.date);
+      let updated = order.shipments.filter(s => !actualDates.includes(s.shipDate));
+      (plan.actualShipments||[]).forEach(ps => {
+        updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', carrier: '', tracking: '' });
+      });
+      const plannedDates = (plan.plannedShipments||[]).map(s => s.date);
+      updated = updated.filter(s => s.status !== 'Planned' || !plannedDates.includes(s.shipDate));
+      (plan.plannedShipments||[]).forEach(ps => {
+        if (ps.qty > 0) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', carrier: '', tracking: '' });
+      });
+      order.shipments = updated;
+
+      // Update poStatus
+      const totalActualShipped = order.shipments.filter(s => s.status === 'Shipped').reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+      if (totalActualShipped >= (parseFloat(order.qty)||0) && totalActualShipped > 0) order.poStatus = 'complete';
+      else if (totalActualShipped > 0) order.poStatus = 'partial';
+
+      // Update deliveryDate
+      const actualShips = order.shipments.filter(s => s.status === 'Shipped' && s.shipDate);
+      const plannedShips = order.shipments.filter(s => s.status === 'Planned' && s.shipDate);
+      if (actualShips.length) {
+        order.deliveryDate = actualShips.map(s => s.shipDate).sort()[0];
+      } else if (plannedShips.length) {
+        order.deliveryDate = plannedShips.map(s => s.shipDate).sort()[0];
+      }
+
+      // Update plannedShipDate
+      const today = new Date().toISOString().substring(0, 10);
+      const futurePlanned = plannedShips.filter(s => s.shipDate >= today);
+      if (futurePlanned.length) {
+        order.plannedShipDate = futurePlanned.map(s => s.shipDate).sort()[0];
+      } else if (plannedShips.length) {
+        order.plannedShipDate = plannedShips.map(s => s.shipDate).sort()[0];
+      }
+
+      if (!actualShips.length && !plannedShips.length) {
+        order.deliveryDate = '';
+        order.plannedShipDate = '';
+      }
+    });
+  });
+  saveOrderStatus(allOrders);
+  return syncCount;
 }
 
 function showImportModal() {
@@ -11711,6 +11802,7 @@ function parseExcelDate(val) {
             <button id="sp_viewTimeline" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:transparent" onclick="setSpView('timeline')">Timeline</button>
           </div>
           <button class="btn btn-outline btn-sm" onclick="showImportModal()">📥 Import</button>
+          <button class="btn btn-outline btn-sm" onclick="doSyncAllPlansToOrders()">🔄 Sync to Orders</button>
           <button class="btn btn-primary btn-sm" onclick="showAddShipmentPlan()">+ Add Plan</button>
           <button class="btn btn-outline btn-sm" onclick="exportShipmentPlan()">⬇ Export CSV</button>
         </div>
