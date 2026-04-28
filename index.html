@@ -10869,8 +10869,8 @@ function renderShipmentPlannerTimeline() {
   h += '.tl-cell:hover{outline:2px solid #3b82f6;outline-offset:-2px;z-index:1;position:relative}';
   h += '.tl-cell-planned{background:#fef3c7;color:#92400e;font-weight:600}';
   h += '.tl-cell-actual{background:#dcfce7;color:#166534;font-weight:700}';
-  h += '.tl-cell-empty{color:#cbd5e1}';
-  h += '.tl-cell-empty:hover{background:#f0f9ff;color:#3b82f6}';
+  h += '.tl-cell-empty{color:#cbd5e1;cursor:pointer}';
+  h += '.tl-cell-empty:hover{background:#eff6ff;color:#3b82f6;font-size:14px;font-weight:700}';
   h += '.tl-info{font-size:10px;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px;background:inherit}';
   h += '.tl-info-po{font-weight:700;color:#1e40af;min-width:100px;max-width:100px;left:0}';
   h += '.tl-info-sm{font-size:10px;color:#64748b;min-width:60px;max-width:60px}';
@@ -10961,8 +10961,8 @@ function renderShipmentPlannerTimeline() {
       if (actual&&actual.qty) { qty=actual.qty; cellCls='tl-cell tl-cell-actual'; title='Shipped: '+qty+' \u2014 click to edit'; type='actual'; }
       else if (planned&&planned.qty) { qty=planned.qty; cellCls='tl-cell tl-cell-planned'; title='Planned: '+qty+' \u2014 click to edit'; type='planned'; }
       const todayBorder = isToday ? 'border-left:2px solid #3b82f6;border-right:2px solid #3b82f6;' : '';
-      const clickHandler = ' onclick="tlEditCell(\'' + ck2.replace(/'/g,"\\'") + '\',' + pid + ',\'' + d + '\',\'' + type + '\')"';
-      h += '<td class="' + cellCls + '" style="' + todayBorder + '"' + clickHandler + ' title="' + title + '">' + (qty > 0 ? qty : '\u00b7') + '</td>';
+      const clickHandler = qty > 0 ? ' onclick="tlEditCell(\'' + ck2.replace(/'/g,"\\'") + '\',' + pid + ',\'' + d + '\',\'' + type + '\')"' : ' onclick="tlQuickAddCell(\'' + ck2.replace(/'/g,"\\'") + '\',' + pid + ',\'' + d + '\')"';
+      h += '<td class="' + cellCls + '" style="' + todayBorder + '"' + clickHandler + ' title="' + title + '">' + (qty > 0 ? qty : '+ ') + '</td>';
     });
 
     h += '<td></td>'; // +Date alignment
@@ -11138,6 +11138,86 @@ function tlAddPlanForDateConfirm(clientKey, date) {
 }
 
 // ── Timeline: Edit cell inline ──
+// ─ Timeline: Quick add shipment for empty cell (pre-filled from row's plan) ─
+function tlQuickAddCell(clientKey, planId, date) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+
+  const orderQty = getOrderQty(plan);
+  const totalShipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+  const outstanding = Math.max(0, orderQty - totalShipped);
+
+  const modal = document.createElement('div');
+  modal.id = 'tlQuickAddModal';
+  modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;width:400px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">' +
+      '<h3 style="margin:0;font-size:15px">\u2795 Add Shipment</h3>' +
+      '<span style="font-size:11px;color:white;background:#3b82f6;padding:2px 10px;border-radius:4px">' + date + '</span>' +
+    '</div>' +
+    '<div style="background:#f8fafc;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:11px">' +
+      '<div style="font-weight:600;color:var(--primary)">' + esc(plan.poNo||'') + ' \u00b7 ' + esc(plan.itemCode||'') + '</div>' +
+      (plan.nfLogo ? '<div style="color:var(--text-muted);margin-top:2px">' + esc(plan.nfLogo) + (plan.variable ? ' \u00b7 ' + esc(plan.variable) : '') + (plan.color ? ' \u00b7 ' + esc(plan.color) : '') + '</div>' : '') +
+      '<div style="display:flex;gap:16px;margin-top:6px;font-size:10px;color:var(--text-muted)">' +
+        '<span>Order: <b style="color:var(--text)">' + orderQty + '</b></span>' +
+        '<span>Shipped: <b style="color:#16a34a">' + totalShipped + '</b></span>' +
+        '<span>Outstanding: <b style="color:#d97706">' + outstanding + '</b></span>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Quantity</label>' +
+          '<input type="number" id="tlqa_qty" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font-size:13px" placeholder="0" min="0" autofocus value="' + (outstanding > 0 ? outstanding : '') + '"></div>' +
+        '<div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Status</label>' +
+          '<select id="tlqa_type" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font-size:13px">' +
+            '<option value="planned">\U0001f4c5 Planned</option>' +
+            '<option value="actual">\u2705 Shipped</option>' +
+          '</select></div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:var(--text-muted);background:#fffbeb;padding:6px 10px;border-radius:6px">' +
+        '\u2139\ufe0f Quick add: shipment will be added to <b>' + esc(plan.poNo||'') + '</b> for date <b>' + date + '</b>' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">' +
+      '<button class="btn btn-outline" onclick="document.getElementById(\'tlQuickAddModal\')?.remove()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="tlQuickAddCellConfirm(\'' + clientKey.replace(/'/g,"\\'") + '\',' + planId + ',\'' + date + '\')">Add</button>' +
+    '</div>' +
+  '</div>';
+  document.body.appendChild(modal);
+  setTimeout(() => { const inp = document.getElementById('tlqa_qty'); if(inp) { inp.focus(); inp.select(); } }, 50);
+}
+
+// Confirm quick add
+function tlQuickAddCellConfirm(clientKey, planId, date) {
+  const plans = spPlans[clientKey] || [];
+  const plan = plans.find(p => p.id === planId);
+  if (!plan) return;
+
+  const qty = parseFloat(document.getElementById('tlqa_qty')?.value) || 0;
+  const type = document.getElementById('tlqa_type')?.value || 'planned';
+
+  if (qty <= 0) { toast('Quantity must be greater than 0', 'error'); return; }
+
+  const arr = type === 'actual' ? (plan.actualShipments = plan.actualShipments||[]) : (plan.plannedShipments = plan.plannedShipments||[]);
+  const existing = arr.find(s => s.date === date);
+  if (existing) {
+    existing.qty = (parseFloat(existing.qty)||0) + qty;
+  } else {
+    arr.push({ date: date, qty: qty });
+  }
+  if (type === 'actual') {
+    plan.completed = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+  }
+
+  saveSpPlans();
+  tlSyncToOrder(clientKey, plan);
+
+  document.getElementById('tlQuickAddModal')?.remove();
+  renderShipmentPlannerTimeline();
+  toast('\u2705 Shipment added: ' + qty + ' for ' + date, 'success');
+}
+
 function tlEditCell(clientKey, planId, date, type) {
   const plans = spPlans[clientKey] || [];
   const plan = plans.find(p => p.id === planId);
