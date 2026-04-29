@@ -322,7 +322,8 @@ input[type=number] { -moz-appearance: textfield; }
     }
 
     function resetNewPOForm() {
-  
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions('');
       document.getElementById('po_confirm_poNo').value = '';
       document.getElementById('po_confirm_client').value = '';
       document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
@@ -374,20 +375,7 @@ input[type=number] { -moz-appearance: textfield; }
       if (dropdown) dropdown.style.display = 'none';
     }
 
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
+    
 
     // Close suggestions on click outside
     document.addEventListener('click', (e) => {
@@ -430,20 +418,7 @@ input[type=number] { -moz-appearance: textfield; }
       if (dropdown) dropdown.style.display = 'none';
     }
 
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
+    
 
     // Close suggestions on click outside
     document.addEventListener('click', (e) => {
@@ -485,20 +460,7 @@ input[type=number] { -moz-appearance: textfield; }
       if (dropdown) dropdown.style.display = 'none';
     }
 
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
+    
 
     // Close suggestions on click outside
     document.addEventListener('click', (e) => {
@@ -540,20 +502,7 @@ input[type=number] { -moz-appearance: textfield; }
       if (dropdown) dropdown.style.display = 'none';
     }
 
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
+    
 
     // Close suggestions on click outside
     document.addEventListener('click', (e) => {
@@ -12285,20 +12234,7 @@ function autoFillPoLinePrice(rowIndex, itemCode) {
   }
 }
 
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
+    
 
     // Close suggestions on click outside
     document.addEventListener('click', (e) => {
