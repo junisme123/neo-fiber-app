@@ -12153,7 +12153,7 @@ function parseExcelDate(val) {
 
     function selectItemCode(rowIndex, code) {
       const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
+      if (row) { row.itemCode = code; _renderPoLines(); autoFillPoLinePrice(rowIndex, code); }
       const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
