@@ -291,10 +291,7 @@ input[type=number] { -moz-appearance: textfield; }
 .import-sheet-item select { padding:4px 8px; border:1px solid var(--border); border-radius:4px; font-size:12px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
-    function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
+          const itemCodes = new Set();
       // Collect from spPlans
       if (window.spPlans && spPlans[clientKey]) {
         spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
@@ -311,18 +308,7 @@ input[type=number] { -moz-appearance: textfield; }
       console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
     }
 
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+          if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
       dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
       dropdown.style.display = 'block';
       const rect = inputEl.getBoundingClientRect();
@@ -331,16 +317,11 @@ input[type=number] { -moz-appearance: textfield; }
       dropdown.style.width = rect.width + 'px';
     }
 
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
+          const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
 
     function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
   
       document.getElementById('po_confirm_poNo').value = '';
       document.getElementById('po_confirm_client').value = '';
@@ -363,10 +344,7 @@ input[type=number] { -moz-appearance: textfield; }
     
 </script>
 <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js">
-    function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
+    f      const itemCodes = new Set();
       // Collect from spPlans
       if (window.spPlans && spPlans[clientKey]) {
         spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
@@ -383,18 +361,7 @@ input[type=number] { -moz-appearance: textfield; }
       console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
     }
 
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+    f      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
       dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
       dropdown.style.display = 'block';
       const rect = inputEl.getBoundingClientRect();
@@ -403,10 +370,7 @@ input[type=number] { -moz-appearance: textfield; }
       dropdown.style.width = rect.width + 'px';
     }
 
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
+    f      const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
 
@@ -436,10 +400,7 @@ input[type=number] { -moz-appearance: textfield; }
 </script>
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js">
-    function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
+    fu      const itemCodes = new Set();
       // Collect from spPlans
       if (window.spPlans && spPlans[clientKey]) {
         spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
@@ -456,18 +417,7 @@ input[type=number] { -moz-appearance: textfield; }
       console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
     }
 
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+    fu      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
       dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
       dropdown.style.display = 'block';
       const rect = inputEl.getBoundingClientRect();
@@ -476,10 +426,7 @@ input[type=number] { -moz-appearance: textfield; }
       dropdown.style.width = rect.width + 'px';
     }
 
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
+    fu      const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
 
@@ -508,10 +455,7 @@ input[type=number] { -moz-appearance: textfield; }
     
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js">
-    function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
+    fun      const itemCodes = new Set();
       // Collect from spPlans
       if (window.spPlans && spPlans[clientKey]) {
         spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
@@ -528,18 +472,7 @@ input[type=number] { -moz-appearance: textfield; }
       console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
     }
 
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+    fun      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
       dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
       dropdown.style.display = 'block';
       const rect = inputEl.getBoundingClientRect();
@@ -548,10 +481,7 @@ input[type=number] { -moz-appearance: textfield; }
       dropdown.style.width = rect.width + 'px';
     }
 
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
+    fun      const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
 
@@ -580,10 +510,7 @@ input[type=number] { -moz-appearance: textfield; }
     
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js">
-    function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
+    func      const itemCodes = new Set();
       // Collect from spPlans
       if (window.spPlans && spPlans[clientKey]) {
         spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
@@ -600,18 +527,7 @@ input[type=number] { -moz-appearance: textfield; }
       console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
     }
 
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+    func      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
       dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
       dropdown.style.display = 'block';
       const rect = inputEl.getBoundingClientRect();
@@ -620,10 +536,7 @@ input[type=number] { -moz-appearance: textfield; }
       dropdown.style.width = rect.width + 'px';
     }
 
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
+    func      const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
 
@@ -1014,7 +927,8 @@ input[type=number] { -moz-appearance: textfield; }
 
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer">
-    <div id="tab-new-po" class="tab-content" style="display:none;">
+</div>
+<div id="tab-new-po" class="tab-content" style="display:none;">
       <div style="max-width:900px; margin:0 auto;">
         <h3 style="margin-bottom:4px;color:var(--primary)">✏️ New PO (Manual Input)</h3>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Fill in PO details manually, no PDF upload required.</div>
@@ -7339,8 +7253,9 @@ function _renderPoLines() {
   const lines = window._poLines || [];
   container.innerHTML = lines.map((row, i) => `
     <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${i%2===0?'white':'#fafafa'}">
-      <input type="text" value="${escapeXml(row.itemCode||'')}" placeholder="Item code"
-        oninput="_poLinesChange(${i},'itemCode',this.value)"
+      <input type="text" id="po_line_item_${i}" value="${escapeXml(row.itemCode||'')}" placeholder="Item code"
+        oninput="handlePoItemCodeInput(this,${i});_poLinesChange(${i},'itemCode',this.value)"
+        onfocus="showItemCodeSuggestions(this,${i})"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
       <input type="text" value="${escapeXml(row.description||'')}" placeholder="Description"
         oninput="_poLinesChange(${i},'description',this.value)"
@@ -12349,6 +12264,26 @@ function parseExcelDate(val) {
       const dropdown = document.getElementById('item-code-suggestions');
       if (dropdown) dropdown.style.display = 'none';
     }
+function handlePoItemCodeInput(inputEl, rowIndex) { showItemCodeSuggestions(inputEl, rowIndex); }
+function autoFillPoLinePrice(rowIndex, itemCode) {
+  if (!itemCode || !itemCode.trim()) return;
+  const clientKey = (document.getElementById('po_confirm_client')||{}).value || '';
+  if (!clientKey) return;
+  const orders = window._poClientOrders || getClientOrders(clientKey);
+  if (!orders || !orders.length) return;
+  const code = itemCode.toLowerCase().trim();
+  const match = orders.find(o => (o.itemCode||'').toLowerCase().trim()===code && o.unitPrice>0);
+  if (match) {
+    const row = (window._poLines||[])[rowIndex];
+    if (row) {
+      row.unitPrice = match.unitPrice;
+      row.description = match.description || match.nfSpec || match.itemDescription || '';
+      if (row.qty && row.qty>0) { row.amount = Math.round(row.qty*match.unitPrice*100)/100; }
+      _renderPoLines();
+      showToast('Price $'+match.unitPrice.toFixed(2)+' auto-filled','success');
+    }
+  }
+}
 
     function resetNewPOForm() {
   const clientSelect = document.getElementById('po_confirm_client');
