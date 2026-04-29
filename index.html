@@ -290,12 +290,367 @@ input[type=number] { -moz-appearance: textfield; }
 .import-sheet-item .sheet-rows { font-size:11px; color:var(--text-muted); }
 .import-sheet-item select { padding:4px 8px; border:1px solid var(--border); border-radius:4px; font-size:12px; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
+</script>
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js">
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
+</script>
 <!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js">
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js">
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js">
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
+</script>
 </head>
 <body>
 
@@ -343,6 +698,7 @@ input[type=number] { -moz-appearance: textfield; }
   <button class="main-tab" onclick="switchTab(&#39;history&#39;)">📋 Invoice History</button>
   <button class="main-tab" onclick="switchTab(&#39;planner&#39;)">🚢 Shipment Planner</button>
   <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow &amp; PO Import</button>
+  <button class="main-tab" onclick="switchTab(&#39;new-po&#39;)">✏️ New PO</button>
 </div>
 
 <div class="content">
@@ -657,9 +1013,67 @@ input[type=number] { -moz-appearance: textfield; }
 </div><!-- /content -->
 
 <!-- Toast container -->
-<div class="toast-container" id="toastContainer"></div>
+<div class="toast-container" id="toastContainer">
+    <div id="tab-new-po" class="tab-content" style="display:none;">
+      <div style="max-width:900px; margin:0 auto;">
+        <h3 style="margin-bottom:4px;color:var(--primary)">✏️ New PO (Manual Input)</h3>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Fill in PO details manually, no PDF upload required.</div>
 
-<script>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
+            <input type="text" id="po_confirm_poNo" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Client</label>
+            <select id="po_confirm_client" onchange="updatePoPaymentDate(); updatePoItemCodeSuggestions()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+              <option value="">-- Select Client --</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Shipment Date</label>
+            <input type="date" id="po_confirm_shipDate" value="" onchange="updatePoPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Payment Due Date <span style="font-size:10px;color:var(--text-muted)">(auto-calculated)</span></label>
+            <input type="date" id="po_confirm_payDate" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum)</span></label>
+            <input type="number" id="po_confirm_amount" value="0.00" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Notes</label>
+            <input type="text" id="po_confirm_notes" value="" placeholder="Optional notes" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+          </div>
+        </div>
+
+        <!-- Line Items Table -->
+        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+          <div style="background:#f0f4f8;padding:8px 12px;display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:12px;font-weight:600;color:var(--primary)">📝 Line Items</div>
+            <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poLinesAddRow()">+ Add Row</button>
+          </div>
+          <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Item Code</div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Description</div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Qty</div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Unit Price</div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Amount</div>
+            <div></div>
+          </div>
+          <div id="po_lines_container" style="max-height:360px;overflow-y:auto"></div>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn btn-outline" onclick="resetNewPOForm()">Reset</button>
+          <button class="btn btn-success" onclick="confirmPoImport()">✓ Confirm & Save to Forecast</button>
+        </div>
+      </div>
+    </div>
+    
+  </div>
+  <script>
 // ============================================================
 // EMBEDDED DATA (injected by build script)
 // ============================================================
@@ -1874,7 +2288,7 @@ let customClients = loadCustomClients();
 // ============================================================
 function switchTab(tab) {
   document.querySelectorAll('.main-tab').forEach((t,i) => {
-    const tabs = ['create','customers','orderstatus','history','planner','cashflow'];
+    const tabs = ['create','customers','orderstatus','history','planner','cashflow','new-po'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -1885,6 +2299,7 @@ function switchTab(tab) {
   if (tab === 'cashflow') { renderCashflow(); initApiKeyInput(); }
   if (tab === 'orderstatus') { initOrderStatusTabs(); renderOrderStatus(); }
   if (tab === 'planner') { initShipmentPlanner(); renderShipmentPlanner(); }
+  if (tab === 'new-po') { resetNewPOForm(); }
 }
 
 // ============================================================
@@ -11887,6 +12302,77 @@ function parseExcelDate(val) {
 
 
 
+
+    function updatePoItemCodeSuggestions() {
+      const clientKey = document.getElementById('po_confirm_client')?.value || '';
+      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
+      const itemCodes = new Set();
+      // Collect from spPlans
+      if (window.spPlans && spPlans[clientKey]) {
+        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
+      }
+      // Collect from orderStatus
+      if (window.orderStatus) {
+        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
+      }
+      // Collect from poForecast
+      if (window.poForecast) {
+        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
+      }
+      window._poItemCodeSuggestions = Array.from(itemCodes);
+      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+    }
+
+    function showItemCodeSuggestions(inputEl, rowIndex) {
+      const query = inputEl.value.toLowerCase();
+      const suggestions = window._poItemCodeSuggestions || [];
+      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
+      let dropdown = document.getElementById('item-code-suggestions');
+      if (!dropdown) {
+        dropdown = document.createElement('div');
+        dropdown.id = 'item-code-suggestions';
+        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
+        document.body.appendChild(dropdown);
+      }
+      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
+      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
+      dropdown.style.display = 'block';
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = rect.left + 'px';
+      dropdown.style.top = rect.bottom + 'px';
+      dropdown.style.width = rect.width + 'px';
+    }
+
+    function selectItemCode(rowIndex, code) {
+      const row = (window._poLines || [])[rowIndex];
+      if (row) { row.itemCode = code; _renderPoLines(); }
+      const dropdown = document.getElementById('item-code-suggestions');
+      if (dropdown) dropdown.style.display = 'none';
+    }
+
+    function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
+  
+      document.getElementById('po_confirm_poNo').value = '';
+      document.getElementById('po_confirm_client').value = '';
+      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
+      document.getElementById('po_confirm_payDate').value = '';
+      document.getElementById('po_confirm_amount').value = '0.00';
+      document.getElementById('po_confirm_notes').value = '';
+      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+      _renderPoLines();
+      window._poItemCodeSuggestions = [];
+    }
+
+    // Close suggestions on click outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
+        const dropdown = document.getElementById('item-code-suggestions');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+    
 </script>
 
 
