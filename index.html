@@ -470,6 +470,20 @@ input[type=number] { -moz-appearance: textfield; }
 .os-table tr.os-ship-row td { background:#f0f7ff; font-size:12px; padding:5px 10px 5px 36px; border-bottom:1px solid #dde8f5; }
 .os-table tr.os-ship-row:last-child td { border-bottom:2px solid #c5d5e8; }
 .os-table tr.os-tbd-row td { background:#fffbeb; font-size:12px; padding:8px 10px; border-top:2px dashed #f59e0b; border-bottom:2px dashed #f59e0b; font-style:italic; color:#92400e; text-align:center; }
+/* Activity Log tab */
+.log-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+.log-table th { background:var(--primary); color:white; padding:8px 10px; text-align:left; font-size:11px; font-weight:600; white-space:nowrap; }
+.log-table td { padding:6px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+.log-table tr:nth-child(even) td { background:var(--row-even); }
+.log-table tr:hover td { background:#e8f0f8; }
+.log-action-badge { display:inline-block; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600; white-space:nowrap; }
+.log-action-invoice { background:#dbeafe; color:#1e40af; }
+.log-action-order { background:#d1fae5; color:#065f46; }
+.log-action-sync { background:#ede9fe; color:#5b21b6; }
+.log-action-planner { background:#fef3c7; color:#92400e; }
+.log-action-delete { background:#fee2e2; color:#991b1b; }
+.log-action-other { background:#f3f4f6; color:#374151; }
+
 /* Inline shipment cells */
 .os-ship-inline { display:inline-flex; flex-direction:column; align-items:center; min-width:52px; padding:2px 6px; border-radius:5px; background:#dbeafe; font-size:10px; line-height:1.4; }
 .os-ship-inline .ship-date { font-weight:600; color:#1e40af; }
@@ -575,6 +589,7 @@ input[type=number] { -moz-appearance: textfield; }
   <button class="main-tab" onclick="switchTab(&#39;history&#39;)">📋 Invoice History</button>
   <button class="main-tab" onclick="switchTab(&#39;planner&#39;)">🚢 Shipment Planner</button>
   <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow &amp; PO Import</button>
+  <button class="main-tab" onclick="switchTab('activitylog')">📝 Activity Log</button>
 
 </div>
 
@@ -1162,6 +1177,116 @@ let state = {
 // ============================================================
 const undoStack = [];
 const UNDO_LIMIT = 50;
+
+// ============================================================
+// ACTIVITY LOG
+// ============================================================
+const ACTIVITY_LOG_KEY = 'nf_activity_log';
+const ACTIVITY_LOG_MAX = 2000;
+
+function getCurrentUserLabel() {
+  if (typeof _fbUser !== 'undefined' && _fbUser) {
+    return _fbUser.displayName || _fbUser.email || 'Google User';
+  }
+  if (typeof _msalAccount !== 'undefined' && _msalAccount) {
+    return _msalAccount.name || _msalAccount.username || 'MS User';
+  }
+  return 'Guest';
+}
+
+function pushActivityLog(actionType, description, target) {
+  try {
+    const logs = loadActivityLogs();
+    const entry = {
+      id: Date.now() + '_' + Math.random().toString(36).substr(2,5),
+      ts: new Date().toISOString(),
+      user: getCurrentUserLabel(),
+      actionType: actionType || 'other',
+      description: description || '',
+      target: target || ''
+    };
+    logs.unshift(entry);
+    if (logs.length > ACTIVITY_LOG_MAX) logs.length = ACTIVITY_LOG_MAX;
+    localStorage.setItem(ACTIVITY_LOG_KEY, JSON.stringify(logs));
+  } catch(e) { console.warn('pushActivityLog error:', e); }
+}
+
+function loadActivityLogs() {
+  try { return JSON.parse(localStorage.getItem(ACTIVITY_LOG_KEY) || '[]'); }
+  catch(e) { return []; }
+}
+
+function clearActivityLog() {
+  localStorage.removeItem(ACTIVITY_LOG_KEY);
+  renderActivityLog();
+  toast('Activity log cleared', 'info');
+}
+
+function exportActivityLog() {
+  const logs = loadActivityLogs();
+  if (!logs.length) { toast('No logs to export', 'info'); return; }
+  const header = ['Timestamp','User','Action Type','Description','Target'];
+  const rows = logs.map(l => [
+    l.ts, l.user, l.actionType,
+    (l.description||'').replace(/,/g,'；'),
+    (l.target||'').replace(/,/g,'；')
+  ]);
+  const csv = [header, ...rows].map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'activity_log_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function renderActivityLog() {
+  const logs = loadActivityLogs();
+  const search = (document.getElementById('log_search')?.value || '').toLowerCase();
+  const filterAction = document.getElementById('log_filter_action')?.value || '';
+  let filtered = logs.filter(l => {
+    if (filterAction && l.actionType !== filterAction) return false;
+    if (search) {
+      const combined = (l.user + l.description + l.target + l.actionType).toLowerCase();
+      if (!combined.includes(search)) return false;
+    }
+    return true;
+  });
+  const tbody = document.getElementById('log_tbody');
+  const emptyEl = document.getElementById('log_empty');
+  const countEl = document.getElementById('log_total_count');
+  const rangeEl = document.getElementById('log_date_range');
+  if (!tbody) return;
+  if (countEl) countEl.textContent = filtered.length + ' record' + (filtered.length !== 1 ? 's' : '');
+  if (rangeEl && logs.length > 0) {
+    const oldest = logs[logs.length-1]?.ts?.slice(0,10) || '';
+    const newest = logs[0]?.ts?.slice(0,10) || '';
+    rangeEl.textContent = oldest === newest ? oldest : oldest + ' → ' + newest;
+  }
+  if (!filtered.length) {
+    tbody.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  const badgeClass = {
+    invoice:'log-action-invoice', order:'log-action-order', sync:'log-action-sync',
+    planner:'log-action-planner', delete:'log-action-delete', other:'log-action-other'
+  };
+  tbody.innerHTML = filtered.map(l => {
+    const dt = new Date(l.ts);
+    const dateStr = dt.toLocaleDateString('en-CA');
+    const timeStr = dt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const cls = badgeClass[l.actionType] || 'log-action-other';
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<tr>
+      <td style="font-size:11px;white-space:nowrap;color:var(--text-muted)">${dateStr}<br><strong>${timeStr}</strong></td>
+      <td style="font-weight:600;font-size:12px">${esc(l.user)}</td>
+      <td><span class="log-action-badge ${cls}">${esc(l.actionType)}</span></td>
+      <td style="font-size:12px">${esc(l.description)}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${esc(l.target)}</td>
+    </tr>`;
+  }).join('');
+}
 
 function saveUndoSnapshot(label) {
   undoStack.push({
@@ -2148,7 +2273,7 @@ let customClients = loadCustomClients();
 // ============================================================
 function switchTab(tab) {
   document.querySelectorAll('.main-tab').forEach((t,i) => {
-    const tabs = ['create','customers','orderstatus','history','planner','cashflow'];
+    const tabs = ['create','customers','orderstatus','history','planner','cashflow','activitylog'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -2159,6 +2284,7 @@ function switchTab(tab) {
   if (tab === 'cashflow') { renderCashflow(); initApiKeyInput(); resetNewPOForm(); }
   if (tab === 'orderstatus') { initOrderStatusTabs(); renderOrderStatus(); }
   if (tab === 'planner') { initShipmentPlanner(); renderShipmentPlanner(); }
+  if (tab === 'activitylog') { renderActivityLog(); }
 
 }
 
@@ -3097,9 +3223,11 @@ function saveHistoryEditFromForm(alsoDownload) {
     state.editingHistoryIdx = null;
     downloadExcel().then(() => {
       toast(`✓ Invoice updated & downloaded${syncInfo}`, 'success');
+      pushActivityLog('invoice', 'Invoice updated & downloaded: ' + (state.invoiceNo || ''), state.invoiceNo || '');
       _updateStep5UI();
     }).catch(() => {
       toast(`✓ Invoice record updated${syncInfo}`, 'success');
+  pushActivityLog('invoice', 'Invoice record updated: ' + (state?.invoiceNo||h?.invoiceNo||''), state?.invoiceNo||h?.invoiceNo||'');
       _updateStep5UI();
     });
   } else {
@@ -3107,6 +3235,7 @@ function saveHistoryEditFromForm(alsoDownload) {
     state.editingHistoryIdx = null;
     _updateStep5UI();
     toast(`✓ Invoice record updated${syncInfo}`, 'success');
+  pushActivityLog('invoice', 'Invoice record updated: ' + (state?.invoiceNo||h?.invoiceNo||''), state?.invoiceNo||h?.invoiceNo||'');
   }
 }
 
@@ -5228,6 +5357,7 @@ function deleteHistory(idx) {
   if (cfIdx >= 0) { cfRecords.splice(cfIdx, 1); saveCashflowRecords(cfRecords); }
   const rollbackMsg = rolledBack > 0 ? ` (${rolledBack} shipment record(s) reversed in Order Status)` : '';
   toast('✓ Invoice record deleted' + rollbackMsg, 'success');
+  pushActivityLog('delete', 'Invoice record deleted: ' + (h?.invoiceNo||''), h?.invoiceNo||'');
   renderHistory();
 }
 
@@ -5575,6 +5705,7 @@ function saveHistoryEdit(idx, originalInvoiceNo) {
   if (osUpdated > 0) syncMsg.push(`${osUpdated} Order shipment(s)`);
   const syncInfo = syncMsg.length > 0 ? ` | Also updated: ${syncMsg.join(', ')}` : '';
   toast(`✓ Invoice record updated${syncInfo}`, 'success');
+  pushActivityLog('invoice', 'Invoice record updated: ' + (state?.invoiceNo||h?.invoiceNo||''), state?.invoiceNo||h?.invoiceNo||'');
 }
 
 function clearHistory() {
@@ -8984,6 +9115,7 @@ function saveAddOrder(editIdx) {
   } else {
     orders.push(record);
     toast(`Order added: ${poNo}`, 'success');
+    pushActivityLog('order', 'Order added: PO ' + poNo + ' ' + (record.itemCode||''), poNo);
   }
   saveClientOrders(clientKey, orders);
   // Auto-sync new/updated order to Shipment Planner Timeline
@@ -11780,12 +11912,14 @@ function saveSpPlan(clientKey, editId) {
       plans[idx] = plan;
     }
     toast('✓ Plan updated', 'success');
+  pushActivityLog('planner', 'Shipment plan updated: PO ' + (plan.poNo||'') + ' ' + (plan.itemCode||''), plan.poNo||'');
   } else {
     if (!spPlans[clientKey]) spPlans[clientKey] = [];
     plan.id = _spNextId++;
     plan.createdAt = new Date().toISOString();
     spPlans[clientKey].push(plan);
     toast('✓ Plan added', 'success');
+  pushActivityLog('planner', 'Shipment plan added: PO ' + (plan.poNo||'') + ' ' + (plan.itemCode||''), plan.poNo||'');
   }
   saveSpPlans();
   // Sync to Order Status: update ship dates + shipments
@@ -11827,6 +11961,7 @@ function deleteSpPlanRow(clientKey, planId) {
   }
   deleteSpPlan(clientKey, planId);
   toast('✓ Plan deleted', 'success');
+  pushActivityLog('delete', 'Shipment plan deleted', '');
   renderShipmentPlanner();
 }
 
@@ -11903,6 +12038,7 @@ function saveSpShipment(clientKey, planId, editIdx, type) {
   saveSpPlans();
   closeSpShipModal();
   toast(type === 'planned' ? '✓ Planned shipment added' : '✓ Actual shipment recorded', 'success');
+  pushActivityLog('planner', (type==='planned'?'Planned shipment added':'Actual shipment recorded') + ' to plan ' + (plan?.poNo||''), plan?.poNo||'');
   renderShipmentPlanner();
 }
 
@@ -13018,6 +13154,7 @@ function syncAllOrdersToPlanner() {
 function doSyncAllPlansToOrders() {
   const count = syncAllPlansToOrders();
   toast('\u2705 Synced ' + count + ' plans to Order Status (all clients)', 'success');
+  pushActivityLog('sync', 'Synced ' + count + ' Planner plan(s) to Order Status', '');
   if (typeof renderOrderStatus === 'function') setTimeout(renderOrderStatus, 200);
 }
 
@@ -13115,6 +13252,34 @@ function syncAllPlansToOrders() {
       if (!actualShips.length && !plannedShips.length) {
         order.deliveryDate = '';
         order.plannedShipDate = '';
+      }
+    });
+  });
+  // ── Cleanup pass: remove stale planner shipment records ──
+  // For each order, remove any source='planner' shipment that no longer
+  // has a matching plan in the current Planner data.
+  loadSpPlans();
+  Object.entries(allOrders).forEach(([clientKey, orders]) => {
+    const clientPlans = spPlans[clientKey] || [];
+    const validPlanIds = new Set(clientPlans.map(p => String(p.id || '')).filter(Boolean));
+    const validPlanKeys = new Set(clientPlans.map(p => _normalizeKey(p.poNo) + '|' + _normalizeKey(p.itemCode)));
+    (orders || []).forEach(order => {
+      if (!order.shipments || !order.shipments.length) return;
+      const before = order.shipments.length;
+      order.shipments = order.shipments.filter(s => {
+        if (s.source !== 'planner') return true; // keep invoice/manual records
+        if (s.planId && validPlanIds.has(String(s.planId))) return true;
+        if (s.planPoNo) {
+          const key = _normalizeKey(s.planPoNo) + '|' + _normalizeKey(order.itemCode);
+          if (validPlanKeys.has(key)) return true;
+          // Also try matching by planPoNo only
+          if (clientPlans.some(p => _normalizeKey(p.poNo) === _normalizeKey(s.planPoNo))) return true;
+        }
+        return false; // stale record — remove
+      });
+      if (order.shipments.length < before) {
+        console.log('[syncAll cleanup] Removed', before - order.shipments.length,
+          'stale planner shipment(s) from', order.poNo, order.itemCode);
       }
     });
   });
@@ -13701,6 +13866,57 @@ function parseExcelDate(val) {
     </div>
   </div>
 
+</div>
+
+<!-- ===== TAB: ACTIVITY LOG ===== -->
+<div id="tab-activitylog" class="tab-panel">
+  <div class="card">
+    <div class="card-header">
+      📝 Activity Log
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <input type="text" id="log_search" placeholder="Search logs..." oninput="renderActivityLog()"
+          style="padding:5px 10px;border:1.5px solid rgba(255,255,255,0.3);border-radius:5px;background:rgba(255,255,255,0.15);color:white;font-size:12px;width:180px">
+        <select id="log_filter_action" onchange="renderActivityLog()"
+          style="padding:5px 8px;border:1.5px solid rgba(255,255,255,0.3);border-radius:5px;background:rgba(255,255,255,0.15);color:white;font-size:12px">
+          <option value="">All Actions</option>
+          <option value="invoice">Invoice</option>
+          <option value="order">Order</option>
+          <option value="sync">Sync</option>
+          <option value="planner">Planner</option>
+          <option value="delete">Delete</option>
+          <option value="other">Other</option>
+        </select>
+        <button class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3)"
+          onclick="exportActivityLog()">⬇ Export CSV</button>
+        <button class="btn btn-sm" style="background:#dc3545;color:white;border:none"
+          onclick="if(confirm('Clear all activity logs?')) { clearActivityLog(); }">🗑 Clear</button>
+      </div>
+    </div>
+    <div class="card-body" style="padding:0">
+      <div style="padding:10px 16px;background:#f8fafc;border-bottom:1px solid var(--border);display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <span id="log_total_count" style="font-size:12px;color:var(--text-muted)">0 records</span>
+        <span id="log_date_range" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th style="width:160px">Timestamp</th>
+              <th style="width:140px">User</th>
+              <th style="width:110px">Action Type</th>
+              <th>Description</th>
+              <th style="width:100px">Target</th>
+            </tr>
+          </thead>
+          <tbody id="log_tbody"></tbody>
+        </table>
+      </div>
+      <div id="log_empty" style="display:none;padding:40px;text-align:center;color:var(--text-muted)">
+        <div style="font-size:32px;margin-bottom:8px">📋</div>
+        <div>No activity logs yet. Actions will be recorded here automatically.</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Price Selector Modal -->
