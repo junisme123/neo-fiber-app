@@ -1067,6 +1067,17 @@ const MASTER_TEMPLATE_DOC = {
     saysTotalCell: 'A62',        // "Says Total:" label; actual text goes in B62
     saysTotalValueCell: 'B62',   // Says Total text value
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' }
+  },
+  pl: {
+    sheetFile: 'xl/worksheets/sheet3.xml',
+    invoiceNoCell: 'M11',        // Invoice# cell (after "INVOICE#" label in L11)
+    dateCellRef: 'M10',          // Date cell (after "DATE:" label in L10)
+    dataStartRow: 19,            // Data rows start at row 19 (row 18 is header)
+    footerRow: 30,               // Total row
+    totalRow: 30,
+    totalQtyCol: 'F',            // F30 = Total Qty (Total Quantity column)
+    totalAmtCol: null,           // PL has no amount column
+    cols: { po:'A', itemCode:'B', qty:'F' }  // Only fill PO#, Item Code, Total Qty
   }
 };
 
@@ -1075,44 +1086,50 @@ const CLIENT_CONFIGS = {
   KS: {
     label: 'KentSports', code: 'KS',
     templateKey: 'KS',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
   VA: {
     label: 'VA Composites', code: 'VA',
     templateKey: 'VA',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
   Gears: {
     label: 'Gears Sports', code: 'GS',
     templateKey: 'GS',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
   TTJ: {
     label: 'TrueSports Japan', code: 'TTJ',
     templateKey: 'TTJ',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
   PGCanada: {
     label: 'PG Canada', code: 'PGC',
     templateKey: 'PGC',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
   PGUS: {
     label: 'PG US', code: 'PGUS',
     templateKey: 'PGUS',
-    hasCI: true,
+    hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
-    ci: { ...UNIFIED_DOC.ci }
+    ci: { ...UNIFIED_DOC.ci },
+    pl: { ...MASTER_TEMPLATE_DOC.pl }
   }
 };
 
@@ -2192,11 +2209,17 @@ function getClientConfig(clientKey) {
     const hasCIFromTemplate = !!(cc.templateB64 && cc.templateConfig && cc.templateConfig.hasCISheet);
     const usingMasterTemplate = !(cc.templateConfig && cc.templateConfig.invoice);
     const hasCI = hasCIFromTemplate || !!(cc.hasCI) || usingMasterTemplate;
+    // PL config: use stored templateConfig.pl if available, else use MASTER_TEMPLATE_DOC.pl
+    const plCfg = cc.templateConfig && cc.templateConfig.pl
+      ? cc.templateConfig.pl
+      : { ...MASTER_TEMPLATE_DOC.pl };
+    const hasPL = !!(cc.templateConfig && cc.templateConfig.hasPLSheet) || !!(cc.hasPL) || usingMasterTemplate;
     return {
-      label: cc.name, code: cc.code, hasCI,
+      label: cc.name, code: cc.code, hasCI, hasPL,
       isCustom: true, customData: cc,
       invoice: invCfg,
-      ci: hasCI ? ciCfg : undefined
+      ci: hasCI ? ciCfg : undefined,
+      pl: hasPL ? plCfg : undefined
     };
   }
   return CLIENT_CONFIGS[clientKey] || null;
@@ -3751,16 +3774,72 @@ async function downloadExcel() {
       zip.file(ciCfg.sheetFile, ciXml);
     }
 
-    // Step 6: Clean workbook.xml (remove PL/PGUS sheet refs) and remove orphaned sheet files
+    // Step 5b: Fill PL (Packing List) sheet
+    if (cfg.pl && cfg.hasPL) {
+      const plCfg = cfg.pl;
+      const plSheetFile = plCfg.sheetFile || 'xl/worksheets/sheet3.xml';
+      const plZipEntry = zip.file(plSheetFile);
+      if (plZipEntry) {
+        let plXml = await plZipEntry.async('string');
+        // Fill Invoice No
+        if (plCfg.invoiceNoCell) {
+          plXml = setCellValue(plXml, ssStrings, plCfg.invoiceNoCell, invoiceNo, 'inlineStr');
+        }
+        // Fill Date
+        if (plCfg.dateCellRef) {
+          const plDateStr = document.getElementById('shipmentDate')?.value || document.getElementById('invoiceDate')?.value || '';
+          if (plDateStr) plXml = setCellValue(plXml, ssStrings, plCfg.dateCellRef, plDateStr, 'inlineStr');
+        }
+        // Fill data rows (PO#, Item Code, Total Qty)
+        const plStartRow = plCfg.dataStartRow || 19;
+        const plFooterRow = plCfg.footerRow || 30;
+        const plCols = plCfg.cols || { po:'A', itemCode:'B', qty:'F' };
+        const plDataRows = rows.filter(r => r && r.itemCode && r.itemCode.trim());
+        const plNumRows = plDataRows.length;
+        const plTemplateRows = plFooterRow - plStartRow; // rows available in template
+        // Fill each data row
+        plDataRows.forEach((r, i) => {
+          const rowNum = plStartRow + i;
+          if (rowNum >= plFooterRow) return; // don't overwrite total row
+          if (plCols.po)       plXml = setCellValue(plXml, ssStrings, plCols.po + rowNum, r.po || '', 'inlineStr');
+          if (plCols.itemCode) plXml = setCellValue(plXml, ssStrings, plCols.itemCode + rowNum, r.itemCode || '', 'inlineStr');
+          if (plCols.qty)      plXml = setCellValue(plXml, ssStrings, plCols.qty + rowNum, String(parseFloat(r.qty) || 0), 'number');
+        });
+        // Fill total qty
+        if (plCfg.totalQtyCol && plCfg.totalRow) {
+          const plTotalQty = plDataRows.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0);
+          plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plCfg.totalRow, String(plTotalQty), 'number');
+        }
+        // Apply customer Ship To info to PL
+        if (custInfo) {
+          // PL Ship To is in A10-A15 area (same as CI ship cells if available)
+          const ccCode = isCustomClient ? clientKey.replace('custom_', '') : null;
+          const ccObj = ccCode ? customClients.find(c => c.code === ccCode) : null;
+          const plShipCells = ccObj && ccObj.templateConfig && ccObj.templateConfig.pl && ccObj.templateConfig.pl.shipCells;
+          if (plShipCells && plShipCells.length > 0) {
+            for (const [cell, field] of plShipCells) {
+              let val;
+              if (field === 'attn_prefixed') val = custInfo.attn ? 'Attn : ' + custInfo.attn : '';
+              else val = custInfo[field] || '';
+              if (val) plXml = setCellValue(plXml, ssStrings, cell, val, 'inlineStr');
+            }
+          }
+        }
+        zip.file(plSheetFile, plXml);
+      }
+    }
+    // Step 6: Clean workbook.xml (keep Invoice, CI, PL; remove other sheets)
     let wbXml = await zip.file('xl/workbook.xml').async('string');
     let wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    // Remove non-invoice/CI sheets from workbook.xml
+    // Remove non-invoice/CI/PL sheets from workbook.xml
+    const keepSheets = ['invoice', 'ci'];
+    if (cfg.pl && cfg.hasPL) keepSheets.push('pl');
     const sheetsToRemove = [];
     const sheetMatches = [...wbXml.matchAll(/<sheet[^>]+name="([^"]+)"[^>]+r:id="([^"]+)"[^>]*\/>/g)];
     for (const m of sheetMatches) {
       const sheetName = m[1].toLowerCase();
       const rId = m[2];
-      if (sheetName !== 'invoice' && sheetName !== 'ci') {
+      if (!keepSheets.includes(sheetName)) {
         sheetsToRemove.push(rId);
         wbXml = wbXml.replace(m[0], '');
       }
@@ -3769,16 +3848,18 @@ async function downloadExcel() {
     for (const rId of sheetsToRemove) {
       wbRels = wbRels.replace(new RegExp(`<Relationship[^>]*Id="${rId}"[^>]*/>`), '');
     }
-    // Remove definedNames that reference removed sheets (e.g. PL!$1:$7)
-    wbXml = wbXml.replace(/<definedName[^>]*>[^<]*(?:PL|PGUS)![^<]*<\/definedName>/g, '');
+    // Remove definedNames that reference removed sheets (e.g. PGUS!$1:$7)
+    wbXml = wbXml.replace(/<definedName[^>]*>[^<]*(?:PGUS)![^<]*<\/definedName>/g, '');
     zip.file('xl/workbook.xml', wbXml);
     zip.file('xl/_rels/workbook.xml.rels', wbRels);
-    // Remove orphaned sheet XML files and their rels
+    // Remove orphaned sheet XML files (sheet4 and above only; keep sheet3 for PL)
     const allZipFiles = Object.keys(zip.files);
     const removedFiles = [];
+    const minOrphanSheet = (cfg.pl && cfg.hasPL) ? 4 : 3;
     for (const f of allZipFiles) {
-      if (/xl\/worksheets\/sheet[3-9]\.xml$/.test(f) ||
-          /xl\/worksheets\/_rels\/sheet[3-9]\.xml\.rels$/.test(f)) {
+      const orphanPattern = new RegExp(`xl/worksheets/sheet[${minOrphanSheet}-9]\.xml$`);
+      const orphanRelsPattern = new RegExp(`xl/worksheets/_rels/sheet[${minOrphanSheet}-9]\.xml\.rels$`);
+      if (orphanPattern.test(f) || orphanRelsPattern.test(f)) {
         zip.remove(f);
         removedFiles.push(f);
       }
@@ -3791,9 +3872,11 @@ async function downloadExcel() {
       const partName = ('/' + f).replace(/[.*+?^${}()|[\]\\]/g, '\$&');
       ctXml = ctXml.replace(new RegExp(`<Override[^>]*PartName="${partName}"[^>]*/>`, 'g'), '');
     }
-    // Also remove drawing3/drawing4 overrides if those drawings belong to removed sheets
-    // (safe to remove all drawing overrides beyond drawing2 since only 2 sheets remain)
-    ctXml = ctXml.replace(/<Override[^>]*PartName="\/xl\/drawings\/drawing[3-9]\.xml"[^>]*\/>/g, '');
+    // Remove drawing overrides beyond what we keep (2 sheets = drawing1/2; 3 sheets = drawing1/2/3)
+    const maxDrawing = (cfg.pl && cfg.hasPL) ? 3 : 2;
+    ctXml = ctXml.replace(
+      new RegExp(`<Override[^>]*PartName="/xl/drawings/drawing[${maxDrawing+1}-9]\.xml"[^>]*/>`, 'g'), ''
+    );
     zip.file('[Content_Types].xml', ctXml);
 
     // Remove calcChain.xml entirely (Excel will recalculate on open, avoids stale sheet refs)
@@ -3817,7 +3900,7 @@ async function downloadExcel() {
     });
 
     const safeInv = invoiceNo.replace(/[\/\\#\s]/g, '_');
-    const defaultName = `${cfg.code}_INVOICE_CI_${safeInv}`;
+    const defaultName = `${cfg.code}_INVOICE_CI_PL_${safeInv}`;
     const userFileName = await promptFileName(defaultName, 'xlsm');
     if (userFileName === null) return; // user cancelled
     const filename = userFileName + '.xlsm';
@@ -3832,6 +3915,7 @@ async function downloadExcel() {
     const _hShipDate = document.getElementById('shipmentDate')?.value || '';
     const _hLinkedPO = document.getElementById('invoiceLinkedPO')?.value?.trim() || '';
     const _hLines = rows.filter(r => r && r.itemCode && r.itemCode.trim()).map(r => ({
+      po: r.po || '',             // per-row PO number (column A) - needed for Order Status sync
       itemCode: r.itemCode || '',
       flex: r.flex || '',
       nfItem: r.nfItem || '',
@@ -3936,8 +4020,10 @@ async function downloadExcel() {
     // Group lines by their per-row PO number; fall back to linkedPONo (header field)
     // if the row-level PO is blank.
     console.log('[OS Update] cfClientKey:', cfClientKey, '| linkedPONo:', linkedPONo, '| invoiceShipmentDate:', invoiceShipmentDate);
+    console.log('[OS Update] cfLines count:', cfLines.length, '| sample:', cfLines.slice(0,2));
     {
       const allOrders = getClientOrders(cfClientKey);
+      console.log('[OS Update] allOrders count for', cfClientKey, ':', allOrders.length);
       let osUpdatedCount = 0;
 
       cfLines.forEach(line => {
@@ -7873,22 +7959,45 @@ function syncOrderStatusFromInvoices() {
     const shipDateObj = shipDateRaw ? new Date(shipDateRaw) : null;
     const shipStatus = (shipDateObj && shipDateObj <= today) ? 'Shipped' : 'Planned';
 
-    if (!clientKey || !invoiceNo) return;
-
-    // Get lines from invoice - try both 'lines' (cfLines format) and '_hLines' format
-    const lines = inv.lines || [];
-    if (lines.length === 0) return;
-
-    // Get orders for this client
-    if (!allOrderData[clientKey]) return;
-    const orders = allOrderData[clientKey];
+    if (!invoiceNo) return;
+    // Get orders for this client - try multiple key formats
+    let orders = null;
+    let resolvedClientKey = clientKey;
+    if (clientKey && allOrderData[clientKey]) {
+      orders = allOrderData[clientKey];
+    } else {
+      const allKeys = Object.keys(allOrderData);
+      const ckLower = (clientKey || '').toLowerCase();
+      const ckNoCustom = (clientKey || '').replace(/^custom_/i, '').toLowerCase();
+      const matchedKey = allKeys.find(k =>
+        k.toLowerCase() === ckLower ||
+        k.toLowerCase() === ckNoCustom ||
+        k.replace(/^custom_/i, '').toLowerCase() === ckNoCustom
+      );
+      if (matchedKey) { orders = allOrderData[matchedKey]; resolvedClientKey = matchedKey; }
+    }
+    if (!orders || orders.length === 0) return;
 
     let linesMatched = 0;
     let linesSkipped = 0;
 
-    lines.forEach(line => {
+    // Determine fallback PO for lines without a per-row PO
+    // History stores: inv.linkedPO (from _hLinkedPO = invoiceLinkedPO field)
+    //                 inv.headerPO (from _hHeaderPO = headerPO field)
+    // Cashflow stores: inv.linkedPO (same field name)
+    const invFallbackPO = (inv.linkedPO || '').trim() || (inv.headerPO || '').trim();
+
+    // If no lines have po field, try to get POs from cashflow records
+    const cfRecord = (loadCashflowRecords() || []).find(r => r.invoiceNo === invoiceNo);
+    const cfLines = cfRecord ? (cfRecord.lines || []) : [];
+
+    lines.forEach((line, lineIdx) => {
       // Support both cfLines format {po, itemCode, qty} and _hLines format {po, itemCode, qty}
-      const linePO = (line.po || '').trim() || (inv.linkedPO || '').trim() || (inv.headerPO || '').trim();
+      // Also try matching with cfLines by index (same order)
+      const cfLine = cfLines[lineIdx];
+      const linePO = (line.po || '').trim()
+        || (cfLine && cfLine.po ? cfLine.po.trim() : '')
+        || invFallbackPO;
       const lineQty = parseFloat(line.qty) || 0;
       const lineItemCode = (line.itemCode || '').toLowerCase().trim();
       const lineNfItem = (line.nfItem || line.nfSpec || '').toLowerCase().trim();
