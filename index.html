@@ -3782,7 +3782,48 @@ async function downloadExcel() {
       if (plZipEntry) {
         let plXml = await plZipEntry.async('string');
         const plStartRow = plCfg.dataStartRow || 19;
-        const plFooterRow = plCfg.footerRow || 30;
+        // ── Auto-detect Total row from XML ──
+        // Strategy 1: Look for row with SUM formula
+        // Strategy 2: Look for row with 'TOTAL' sharedString reference
+        // Strategy 3: Fall back to config footerRow
+        let plFooterRow = plCfg.footerRow || 30;
+        {
+          // Build sharedStrings index → text map from ssStrings
+          const totalKeywords = ['total', 'total :', 'total:', 'totals'];
+          // Check each row for TOTAL keyword in sharedStrings
+          const plRowMatches = [...plXml.matchAll(/<row[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)];
+          let plTotalFound = false;
+          for (const rm of plRowMatches) {
+            if (plTotalFound) break;
+            const rowNum = parseInt(rm[1]);
+            if (rowNum <= plStartRow) continue; // skip header/data start rows
+            const rowContent = rm[2];
+            // Check for SUM formula
+            if (/SUM\(/i.test(rowContent)) {
+              plFooterRow = rowNum;
+              plTotalFound = true;
+              break;
+            }
+            // Check for sharedString reference matching TOTAL
+            const ssRefs = [...rowContent.matchAll(/t="s"><v>(\d+)<\/v>/g)];
+            for (const sr of ssRefs) {
+              const ssIdx = parseInt(sr[1]);
+              const ssVal = (ssStrings[ssIdx] || '').toLowerCase().trim();
+              if (totalKeywords.some(k => ssVal === k || ssVal.startsWith('total'))) {
+                plFooterRow = rowNum;
+                plTotalFound = true;
+                break;
+              }
+            }
+            if (plTotalFound) break;
+            // Check for inlineStr containing TOTAL
+            if (/<t[^>]*>[^<]*total[^<]*<\/t>/i.test(rowContent)) {
+              plFooterRow = rowNum;
+              plTotalFound = true;
+              break;
+            }
+          }
+        }
         const plCols = plCfg.cols || { po:'A', itemCode:'B', qty:'F' };
         const plDataRows = rows.filter(r => r && r.itemCode && r.itemCode.trim());
         const plNumRows = plDataRows.length;
@@ -3872,10 +3913,15 @@ async function downloadExcel() {
           if (plDateStr) plXml = setCellValue(plXml, ssStrings, plCfg.dateCellRef, plDateStr, 'inlineStr');
         }
 
-        // ── Step 5b-data: Fill data rows (PO#, Item Code, Total Qty) ──
+        // ── Step 5b-data: Fill data rows (Line#, PO#, Item Code, Total Qty) ──
         const plFinalFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows) - Math.max(0, plTemplateDataRows - plNumRows);
         plDataRows.forEach((r, i) => {
           const rowNum = plStartRow + i;
+          // Fill line number in the first available column before PO# (if plCols.lineNo defined)
+          // or use a dedicated lineNo col from config
+          if (plCols.lineNo) {
+            plXml = setCellValue(plXml, ssStrings, plCols.lineNo + rowNum, String(i + 1), 'number');
+          }
           if (plCols.po)       plXml = setCellValue(plXml, ssStrings, plCols.po + rowNum, r.po || '', 'inlineStr');
           if (plCols.itemCode) plXml = setCellValue(plXml, ssStrings, plCols.itemCode + rowNum, r.itemCode || '', 'inlineStr');
           if (plCols.qty)      plXml = setCellValue(plXml, ssStrings, plCols.qty + rowNum, String(parseFloat(r.qty) || 0), 'number');
@@ -8840,10 +8886,59 @@ function saveAddOrder(editIdx) {
     toast(`Order added: ${poNo}`, 'success');
   }
   saveClientOrders(clientKey, orders);
+  // Auto-sync new/updated order to Shipment Planner Timeline
+  _syncOrderToPlanner(clientKey, record);
   osCurrentClient = clientKey;
   closeModal();
   initOrderStatusTabs();
   renderOrderStatus();
+}
+// Sync a single order record to Shipment Planner (create plan if not exists)
+function _syncOrderToPlanner(clientKey, order) {
+  if (!order || !order.poNo) return;
+  loadSpPlans();
+  if (!spPlans[clientKey]) spPlans[clientKey] = [];
+  const plans = spPlans[clientKey];
+  const poNorm = _normalizeKey(order.poNo);
+  const itemNorm = _normalizeKey(order.itemCode || '');
+  const existing = plans.find(p =>
+    _normalizeKey(p.poNo) === poNorm &&
+    (_normalizeKey(p.itemCode || '') === itemNorm || !itemNorm || !_normalizeKey(p.itemCode || ''))
+  );
+  if (!existing) {
+    const newPlan = {
+      id: _spNextId++,
+      poNo: order.poNo,
+      itemCode: order.itemCode || '',
+      jobNo: order.prodOrderNo || '',
+      pgCode: order.itemCode || '',
+      nfItem: order.nfSpec || '',
+      nfLogo: '',
+      variable: order.flex || '',
+      color: order.colour || '',
+      qty: order.qty || 0,
+      unitPrice: order.unitPrice || 0,
+      orderDate: order.orderDate || '',
+      shipmentDate: order.plannedShipDate || '',
+      notes: order.notes || '',
+      plannedShipments: [],
+      actualShipments: [],
+      createdAt: new Date().toISOString()
+    };
+    if (order.plannedShipDate && order.qty > 0) {
+      newPlan.plannedShipments.push({ date: order.plannedShipDate, qty: order.qty });
+    }
+    plans.push(newPlan);
+    saveSpPlans();
+    console.log('[Planner] Auto-created plan for', order.poNo, order.itemCode);
+  } else {
+    let changed = false;
+    if (!existing.qty && order.qty) { existing.qty = order.qty; changed = true; }
+    if (!existing.itemCode && order.itemCode) { existing.itemCode = order.itemCode; changed = true; }
+    if (!existing.orderDate && order.orderDate) { existing.orderDate = order.orderDate; changed = true; }
+    if (!existing.unitPrice && order.unitPrice) { existing.unitPrice = order.unitPrice; changed = true; }
+    if (changed) { saveSpPlans(); }
+  }
 }
 
 function editOrderDialog(idx) {
@@ -11251,7 +11346,10 @@ function initShipmentPlanner() {
 
 // ── Render ──────────────────────────────────────────────────────
 function renderShipmentPlanner() {
-  // Check view mode
+  // Always use Timeline mode
+  renderShipmentPlannerTimeline();
+  return;
+  // Legacy list view code below (disabled)
   if (spCurrentView === 'timeline') {
     renderShipmentPlannerTimeline();
     return;
@@ -11812,7 +11910,7 @@ function downloadBlob(content, mimeType, filename) {
 }
 
 // Shipment Planner view state
-let spCurrentView = 'list';
+let spCurrentView = 'timeline';
 let spSortCol = '';
 let spSortDir = 'asc';
 let spFilterText = '';
@@ -11979,8 +12077,47 @@ function renderShipmentPlannerTimeline() {
 
   const wrapper = document.getElementById('sp_tableWrapper');
   if (!wrapper) return;
-  if (!dates.length||!allPlans.length) {
-    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:60px 20px"><div style="font-size:56px;margin-bottom:16px">📋</div><p style="font-size:14px">No shipment timeline data.</p><p style="font-size:12px;color:var(--text-muted)">Import data or add plans to see the timeline view.</p></div>';
+  if (!allPlans.length) {
+    // No plans at all - show empty state with sync button
+    const allOrders = loadOrderStatus();
+    let hasOrders = false;
+    Object.values(allOrders).forEach(ords => { if ((ords||[]).length) hasOrders = true; });
+    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:60px 20px">' +
+      '<div style="font-size:56px;margin-bottom:16px">🚢</div>' +
+      '<p style="font-size:14px;font-weight:600;color:#1e40af">No shipment plans yet.</p>' +
+      (hasOrders
+        ? '<p style="font-size:12px;margin-top:8px">You have orders in Order Status. <button class="btn btn-primary btn-sm" style="margin-left:8px" onclick="syncAllOrdersToPlanner()">📥 Import from Orders</button></p>'
+        : '<p style="font-size:12px">Add orders in Order Status or click <b>+ Add Plan</b> to get started.</p>') +
+      '</div>';
+    return;
+  }
+  if (!dates.length) {
+    // Plans exist but no shipment dates - show plan list without date columns
+    let h2 = '<div style="padding:12px">';
+    h2 += '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:12px;color:#92400e">';
+    h2 += '⚠️ ' + allPlans.length + ' plan(s) loaded but no shipment dates assigned. Click <b>+ Add Plan</b> to add shipment dates, or click a plan row to edit.';
+    h2 += '</div>';
+    h2 += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h2 += '<thead><tr style="background:#1e3a8a;color:white">';
+    h2 += '<th style="padding:8px 10px;text-align:left">PO#</th><th style="padding:8px 10px;text-align:left">Item Code</th>';
+    h2 += '<th style="padding:8px 10px;text-align:left">Client</th><th style="padding:8px 10px;text-align:center">QTY</th>';
+    h2 += '<th style="padding:8px 10px;text-align:left">Order Date</th><th style="padding:8px 10px;text-align:center">Status</th>';
+    h2 += '</tr></thead><tbody>';
+    allPlans.forEach((p, i) => {
+      const bg = i % 2 === 0 ? 'white' : '#f8fafc';
+      const status = computeSpStatus(p);
+      const statusBadge = {complete:'🟢 Complete', partial:'🟡 Partial', planned:'🔵 Planned', pending:'⏳ Pending'}[status] || status;
+      h2 += '<tr style="background:' + bg + ';cursor:pointer" onclick="editSpPlan('' + esc(p._clientKey||'') + '',' + (p.id||0) + ')">';
+      h2 += '<td style="padding:7px 10px;font-weight:700;color:#1e40af">' + esc(p.poNo||'') + '</td>';
+      h2 += '<td style="padding:7px 10px">' + esc(p.itemCode||'') + '</td>';
+      h2 += '<td style="padding:7px 10px;color:#64748b">' + esc(p._clientLabel||p._clientKey||'') + '</td>';
+      h2 += '<td style="padding:7px 10px;text-align:center">' + (p.qty||0) + '</td>';
+      h2 += '<td style="padding:7px 10px;color:#64748b">' + esc(p.orderDate||'—') + '</td>';
+      h2 += '<td style="padding:7px 10px;text-align:center;font-size:11px">' + statusBadge + '</td>';
+      h2 += '</tr>';
+    });
+    h2 += '</tbody></table></div>';
+    wrapper.innerHTML = h2;
     return;
   }
 
@@ -12724,6 +12861,54 @@ function tlSyncToOrder(clientKey, plan) {
   }
 }
 
+// Sync all orders from Order Status to Shipment Planner (create plans for orders without plans)
+function syncAllOrdersToPlanner() {
+  const allOrders = loadOrderStatus();
+  let created = 0;
+  Object.entries(allOrders).forEach(([clientKey, orders]) => {
+    (orders || []).forEach(order => {
+      if (!order.poNo) return;
+      loadSpPlans();
+      if (!spPlans[clientKey]) spPlans[clientKey] = [];
+      const plans = spPlans[clientKey];
+      const poNorm = _normalizeKey(order.poNo);
+      const itemNorm = _normalizeKey(order.itemCode || '');
+      const existing = plans.find(p =>
+        _normalizeKey(p.poNo) === poNorm &&
+        (_normalizeKey(p.itemCode || '') === itemNorm || !itemNorm)
+      );
+      if (!existing) {
+        const newPlan = {
+          id: _spNextId++,
+          poNo: order.poNo,
+          itemCode: order.itemCode || '',
+          jobNo: order.prodOrderNo || '',
+          pgCode: order.itemCode || '',
+          nfItem: order.nfSpec || '',
+          nfLogo: '',
+          variable: order.flex || '',
+          color: order.colour || '',
+          qty: order.qty || 0,
+          unitPrice: order.unitPrice || 0,
+          orderDate: order.orderDate || '',
+          shipmentDate: order.plannedShipDate || '',
+          notes: order.notes || '',
+          plannedShipments: [],
+          actualShipments: [],
+          createdAt: new Date().toISOString()
+        };
+        if (order.plannedShipDate && order.qty > 0) {
+          newPlan.plannedShipments.push({ date: order.plannedShipDate, qty: order.qty });
+        }
+        plans.push(newPlan);
+        created++;
+      }
+    });
+  });
+  saveSpPlans();
+  toast('✅ Imported ' + created + ' new plans from Order Status', 'success');
+  renderShipmentPlanner();
+}
 // Batch sync all plans to orders for ALL clients
 function doSyncAllPlansToOrders() {
   const count = syncAllPlansToOrders();
@@ -13134,11 +13319,12 @@ function parseExcelDate(val) {
           <button id="sp_bulkBtn" class="btn btn-outline btn-sm" onclick="toggleSpBulkMode()">☑ Bulk Delete</button>
           <button class="btn btn-outline btn-sm" style="color:#dc2626" onclick="spDeleteAll()">🗑 Delete All</button>
         <div style="display:flex;gap:8px;align-items:center">
-          <div style="display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-            <button id="sp_viewList" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:var(--primary);color:white" onclick="setSpView('list')">List</button>
-            <button id="sp_viewTimeline" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:transparent" onclick="setSpView('timeline')">Timeline</button>
+          <div style="display:none">
+            <button id="sp_viewList" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:transparent" onclick="setSpView('list')">List</button>
+            <button id="sp_viewTimeline" class="btn btn-sm" style="border:none;border-radius:0;padding:6px 12px;background:var(--primary);color:white" onclick="setSpView('timeline')">Timeline</button>
           </div>
           <button class="btn btn-outline btn-sm" onclick="showImportModal()">📥 Import</button>
+          <button class="btn btn-outline btn-sm" onclick="syncAllOrdersToPlanner()">📋 From Orders</button>
           <button class="btn btn-outline btn-sm" onclick="doSyncAllPlansToOrders()">🔄 Sync to Orders</button>
           <button class="btn btn-primary btn-sm" onclick="showAddShipmentPlan()">+ Add Plan</button>
           <button class="btn btn-outline btn-sm" onclick="exportShipmentPlan()">⬇ Export CSV</button>
