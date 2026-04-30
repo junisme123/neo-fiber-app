@@ -4087,7 +4087,8 @@ async function downloadExcel() {
     // Each cfLine now carries its own .po field (from column A of the invoice table).
     // Group lines by their per-row PO number; fall back to linkedPONo (header field)
     // if the row-level PO is blank.
-    console.log('[OS Update] cfClientKey:', cfClientKey, '| linkedPONo:', linkedPONo, '| invoiceShipmentDate:', invoiceShipmentDate);
+    console.log('[OS Update] cfClientKey:', cfClientKey, '| linkedPONo:', linkedPONo, '| invoiceShipmentDate:', invoiceShipmentDate, '| cfLines count:', cfLines.length);
+    console.log('[OS Update] cfLines sample:', JSON.stringify(cfLines.slice(0,2)));
     console.log('[OS Update] cfLines count:', cfLines.length, '| sample:', cfLines.slice(0,2));
     {
       const allOrders = getClientOrders(cfClientKey);
@@ -11834,16 +11835,32 @@ function spDeleteAll() {
 // ── Global helpers for Timeline ──
 function getOrderQty(plan) {
   const ck2 = plan._clientKey;
-  if (!ck2) return parseFloat(plan.qty)||0;
+  const planQty = parseFloat(plan.qty) || 0;
+  if (!ck2) return planQty;
   const orders = getClientOrders(ck2) || [];
-  const o = orders.find(x => x.poNo === plan.poNo && x.itemCode === plan.itemCode);
-  return o ? (parseFloat(o.qty)||0) : (parseFloat(plan.qty)||0);
+  if (!orders.length) return planQty;
+  // 1. Exact match: poNo + itemCode
+  const pNo = (plan.poNo || '').toString().trim();
+  const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
+  let o = orders.find(x =>
+    (x.poNo||'').toString().trim() === pNo &&
+    (x.itemCode||'').toString().trim().toUpperCase() === pItem
+  );
+  // 2. Fuzzy: poNo only (first match)
+  if (!o && pNo) o = orders.find(x => (x.poNo||'').toString().trim() === pNo);
+  // 3. Fallback: use plan.qty (manually entered)
+  return o ? (parseFloat(o.qty)||0) : planQty;
 }
 function getOutstanding(plan) {
+  // orderQty: from Order Status (if matched) or plan.qty (manual)
   const orderQty = getOrderQty(plan);
   const shipped = (plan.actualShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
   const planned = (plan.plannedShipments||[]).reduce((s,sh) => s + (parseFloat(sh.qty)||0), 0);
+  // If orderQty is 0 but there are shipments, show negative as 0
   return Math.max(0, orderQty - shipped - planned);
+}
+function getOrderQtyDisplay(plan) {
+  return getOrderQty(plan);
 }
 
 function renderShipmentPlannerTimeline() {
@@ -11944,7 +11961,7 @@ function renderShipmentPlannerTimeline() {
   });
   // +Date column in month row
   h += '<th class="tl-head-month tl-head-plus" onclick="tlAddDateColumn()" title="Add new date column">+</th>';
-  h += '<th colspan="2" class="tl-head-month" style="font-size:10px;font-weight:500;letter-spacing:0">SUMMARY</th>';
+  h += '<th colspan="3" class="tl-head-month" style="font-size:10px;font-weight:500;letter-spacing:0">SUMMARY</th>';
   h += '</tr>';
 
   // ── Row 2: Column labels + Date headers ──
@@ -11958,6 +11975,7 @@ function renderShipmentPlannerTimeline() {
     {label:'Variable', w:'75px', cls:'tl-sticky-l5'},
     {label:'Color', w:'75px', cls:'tl-sticky-l6'},
   ];
+  // Note: fixedCols drives header only; data rows use separate logic below
   fixedCols.forEach((c,idx) => {
     h += '<th class="tl-sticky ' + c.cls + '" style="background:#f1f5f9;min-width:' + c.w + ';max-width:' + c.w + ';padding:6px 4px;text-align:left;font-size:10px;font-weight:600;color:#475569;border-bottom:2px solid #94a3b8;z-index:4">' + c.label + '</th>';
   });
@@ -11982,7 +12000,8 @@ function renderShipmentPlannerTimeline() {
   });
 
   h += '<th class="tl-head-plus" onclick="tlAddDateColumn()" title="Add date column" style="border-bottom:2px solid #94a3b8">+</th>';
-  h += '<th style="background:#f1f5f9;padding:6px 4px;text-align:center;font-size:10px;font-weight:600;color:#d97706;border-bottom:2px solid #94a3b8;min-width:56px">OUT</th>';
+  h += '<th style="background:#f1f5f9;padding:6px 4px;text-align:center;font-size:10px;font-weight:600;color:#6366f1;border-bottom:2px solid #94a3b8;min-width:56px" title="Order Qty (from Order Status)">ORD</th>';
+  h += '<th style="background:#f1f5f9;padding:6px 4px;text-align:center;font-size:10px;font-weight:600;color:#d97706;border-bottom:2px solid #94a3b8;min-width:56px" title="Outstanding = ORD - Shipped - Planned">OUT</th>';
   h += '<th style="background:#f1f5f9;padding:6px 4px;text-align:center;font-size:10px;font-weight:600;color:#16a34a;border-bottom:2px solid #94a3b8;min-width:56px">DONE</th>';
   h += '</tr></thead><tbody>';
 
@@ -12012,10 +12031,12 @@ function renderShipmentPlannerTimeline() {
     });
 
     h += '<td></td>'; // +Date alignment
+    const ordQty = getOrderQtyDisplay(p);
     const outstand = getOutstanding(p);
     const comp = (p.actualShipments||[]).reduce((s,sh)=>s+(parseFloat(sh.qty)||0),0);
-    h += '<td class="tl-stat tl-stat-out">' + outstand + '</td>';
-    h += '<td class="tl-stat tl-stat-comp">' + comp + '</td>';
+    h += '<td class="tl-stat" style="color:#6366f1" title="Order Qty from Order Status or plan">' + (ordQty||'—') + '</td>';
+    h += '<td class="tl-stat tl-stat-out" title="Outstanding = Ord - Shipped - Planned">' + outstand + '</td>';
+    h += '<td class="tl-stat tl-stat-comp" title="Completed (Actual Shipped)">' + comp + '</td>';
     h += '</tr>';
   });
 
@@ -12035,8 +12056,10 @@ function renderShipmentPlannerTimeline() {
     h += '<td style="text-align:center;padding:6px 2px;' + bg + ';font-size:11px;font-weight:700;min-width:44px">' + (val||'') + '</td>';
   });
   h += '<td></td>';
+  const grandOrd=allPlans.reduce((s,p)=>s+getOrderQtyDisplay(p),0);
   const grandOut=allPlans.reduce((s,p)=>s+getOutstanding(p),0);
   const grandComp=allPlans.reduce((s,p)=>s+(p.actualShipments||[]).reduce((ss,sh)=>ss+(parseFloat(sh.qty)||0),0),0);
+  h += '<td class="tl-stat" style="color:#6366f1;font-size:12px">' + grandOrd + '</td>';
   h += '<td class="tl-stat tl-stat-out" style="font-size:12px">' + grandOut + '</td>';
   h += '<td class="tl-stat tl-stat-comp" style="font-size:12px">' + grandComp + '</td>';
   h += '</tr></tbody></table></div>';
@@ -12053,7 +12076,9 @@ function renderShipmentPlannerTimeline() {
   h += '<span style="color:#3b82f6">Click date header = add plan for that date</span>';
   h += '<span style="color:#3b82f6">Click cell = edit/add shipment qty</span>';
   h += '<span style="color:#3b82f6">Click + = add new date column</span>';
-  h += '<span style="margin-left:auto;color:var(--text-muted);font-size:10px">OUT = Order Qty - Shipped | ' + dates.length + ' columns | ' + allPlans.length + ' rows</span>';
+  h += '<span style="color:#6366f1;font-weight:600">ORD</span><span style="color:var(--text-muted)"> = Order Qty (from Order Status)</span>';
+  h += '<span style="color:#d97706;font-weight:600">OUT</span><span style="color:var(--text-muted)"> = ORD - Shipped - Planned</span>';
+  h += '<span style="margin-left:auto;color:var(--text-muted);font-size:10px">' + dates.length + ' columns | ' + allPlans.length + ' rows</span>';
   h += '</div>';
 
   wrapper.innerHTML = h;
