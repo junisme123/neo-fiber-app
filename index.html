@@ -7087,6 +7087,27 @@ document.addEventListener('click', function(e) {
   }
 });
 
+// ── resetNewPOForm: initialize/reset the inline New PO form in Cashflow tab ──
+function resetNewPOForm() {
+  const clientSelect = document.getElementById('po_confirm_client');
+  if (clientSelect) clientSelect.innerHTML = buildClientOptions('');
+  const poNoEl = document.getElementById('po_confirm_poNo');
+  if (poNoEl) poNoEl.value = '';
+  const clientEl = document.getElementById('po_confirm_client');
+  if (clientEl) clientEl.value = '';
+  const shipEl = document.getElementById('po_confirm_shipDate');
+  if (shipEl) shipEl.value = new Date().toISOString().split('T')[0];
+  const payEl = document.getElementById('po_confirm_payDate');
+  if (payEl) payEl.value = '';
+  const amtEl = document.getElementById('po_confirm_amount');
+  if (amtEl) amtEl.value = '0.00';
+  const notesEl = document.getElementById('po_confirm_notes');
+  if (notesEl) notesEl.value = '';
+  window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
+  _renderPoLines();
+  window._poItemCodeSuggestions = [];
+}
+
 function _poLinesChange(i, field, val) {
   if (!window._poLines || !window._poLines[i]) return;
   window._poLines[i][field] = (field==='qty'||field==='unitPrice'||field==='amount') ? parseFloat(val)||0 : val;
