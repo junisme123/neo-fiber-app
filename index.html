@@ -4171,6 +4171,8 @@ async function downloadExcel() {
 
       if (cfLines.some(l => (l.po || '').trim())) {
         saveClientOrders(cfClientKey, allOrders);
+        // Sync to Shipment Planner
+        _syncOrderShipmentsToPlanner(cfClientKey, allOrders[cfClientKey] || []);
         // Re-render Order Status if currently on that tab
         if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
           renderOrderStatus();
@@ -7864,6 +7866,62 @@ function saveClientOrders(clientKey, orders) {
   const all = loadOrderStatus();
   all[clientKey] = orders;
   saveOrderStatus(all);
+  // Sync shipments back to Shipment Planner
+  _syncOrderShipmentsToPlanner(clientKey, orders);
+}
+// Sync Order Status shipments back to Shipment Planner plans
+function _syncOrderShipmentsToPlanner(clientKey, orders) {
+  if (!clientKey || !orders || !orders.length) return;
+  loadSpPlans();
+  let changed = false;
+  orders.forEach(order => {
+    if (!order.shipments || !order.shipments.length) return;
+    const poNorm = _normalizeKey(order.poNo);
+    const itemNorm = _normalizeKey(order.itemCode);
+    // Find matching plan in all clientKey variants
+    const ckVariants = [clientKey, clientKey.replace(/^custom_/i,''), clientKey.toUpperCase()];
+    let plan = null;
+    let planCk = clientKey;
+    for (const ck of ckVariants) {
+      const plans = spPlans[ck] || [];
+      plan = plans.find(p => _normalizeKey(p.poNo) === poNorm && _normalizeKey(p.itemCode) === itemNorm);
+      if (!plan) {
+        plan = plans.find(p => _normalizeKey(p.poNo) === poNorm && (
+          _normalizeKey(p.pgCode) === itemNorm ||
+          _normalizeKey(p.nfItem) === itemNorm
+        ));
+      }
+      if (plan) { planCk = ck; break; }
+    }
+    if (!plan) return; // No matching plan in Shipment Planner, skip
+    // Sync shipments from Order Status to Shipment Planner
+    const osShipped = order.shipments.filter(s => s.status === 'Shipped');
+    const osPlanned = order.shipments.filter(s => s.status === 'Planned');
+    // Update actualShipments
+    const existingActualDates = (plan.actualShipments||[]).map(s => s.date);
+    osShipped.forEach(s => {
+      if (!existingActualDates.includes(s.shipDate)) {
+        if (!plan.actualShipments) plan.actualShipments = [];
+        plan.actualShipments.push({ date: s.shipDate, qty: parseFloat(s.qty)||0 });
+        changed = true;
+      }
+    });
+    // Update plannedShipments
+    const existingPlannedDates = (plan.plannedShipments||[]).map(s => s.date);
+    osPlanned.forEach(s => {
+      if (!existingPlannedDates.includes(s.shipDate)) {
+        if (!plan.plannedShipments) plan.plannedShipments = [];
+        plan.plannedShipments.push({ date: s.shipDate, qty: parseFloat(s.qty)||0 });
+        changed = true;
+      }
+    });
+    // Update completed count
+    plan.completed = (plan.actualShipments||[]).reduce((sum, s) => sum + (parseFloat(s.qty)||0), 0);
+  });
+  if (changed) {
+    saveSpPlans();
+    console.log('[Sync] Order Status → Shipment Planner: updated plans');
+  }
 }
 
 // ── Current state ────────────────────────────────────────────
@@ -8150,6 +8208,10 @@ function syncOrderStatusFromInvoices() {
 
   // ── Step 5: Save and refresh ──
   saveOrderStatus(allOrderData);
+  // Also sync to Shipment Planner
+  Object.keys(allOrderData).forEach(ck => {
+    _syncOrderShipmentsToPlanner(ck, allOrderData[ck]);
+  });
   initOrderStatusTabs();
   renderOrderStatus();
 
@@ -12521,12 +12583,34 @@ function tlAddDateConfirm() {
 }
 
 // ── Timeline: Sync back to Order Status ──
+function _normalizeKey(s) {
+  return String(s||'').trim().toUpperCase().replace(/\s+/g,'');
+}
 function tlSyncToOrder(clientKey, plan) {
   if (!clientKey || !plan) return;
   const allOrders = loadOrderStatus();
-  if (!allOrders[clientKey]) allOrders[clientKey] = [];
-  const clientOrders = allOrders[clientKey];
-  let order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
+  // Try all clientKey variants: exact, uppercase, without custom_ prefix
+  const ckVariants = [clientKey, clientKey.toUpperCase(), clientKey.replace(/^custom_/i,''), clientKey.toLowerCase()];
+  let resolvedCk = clientKey;
+  for (const v of ckVariants) {
+    if (allOrders[v]) { resolvedCk = v; break; }
+  }
+  if (!allOrders[resolvedCk]) allOrders[resolvedCk] = [];
+  const clientOrders = allOrders[resolvedCk];
+  const planPoNorm = _normalizeKey(plan.poNo);
+  const planItemNorm = _normalizeKey(plan.itemCode);
+  // Fuzzy match: normalize poNo + itemCode
+  let order = clientOrders.find(o => _normalizeKey(o.poNo) === planPoNorm && _normalizeKey(o.itemCode) === planItemNorm);
+  // If still not found, try matching by poNo only (same PO, different item code format)
+  if (!order && planItemNorm) {
+    order = clientOrders.find(o => _normalizeKey(o.poNo) === planPoNorm && (
+      _normalizeKey(o.pgCode) === planItemNorm ||
+      _normalizeKey(o.nfItem) === planItemNorm ||
+      _normalizeKey(o.itemCode).includes(planItemNorm) ||
+      planItemNorm.includes(_normalizeKey(o.itemCode))
+    ));
+  }
+  const clientKey2 = resolvedCk;
   if (!order) {
     order = {
       poNo: plan.poNo || '',
@@ -12608,8 +12692,12 @@ function tlSyncToOrder(clientKey, plan) {
     order.plannedShipDate = '';
   }
 
-  allOrders[clientKey] = clientOrders;
+  allOrders[clientKey2] = clientOrders;
   saveOrderStatus(allOrders);
+  // Refresh Order Status display if currently visible
+  if (typeof renderOrderStatus === 'function' && document.getElementById('tab-orderstatus')?.classList.contains('active')) {
+    setTimeout(renderOrderStatus, 100);
+  }
 }
 
 // Batch sync all plans to orders for ALL clients
@@ -12626,7 +12714,17 @@ function syncAllPlansToOrders() {
     plans.forEach(plan => {
       if (!allOrders[clientKey]) allOrders[clientKey] = [];
       const clientOrders = allOrders[clientKey];
-      let order = clientOrders.find(o => o.poNo === plan.poNo && o.itemCode === plan.itemCode);
+      const saPlanPoNorm = _normalizeKey(plan.poNo);
+      const saPlanItemNorm = _normalizeKey(plan.itemCode);
+      let order = clientOrders.find(o => _normalizeKey(o.poNo) === saPlanPoNorm && _normalizeKey(o.itemCode) === saPlanItemNorm);
+      if (!order && saPlanItemNorm) {
+        order = clientOrders.find(o => _normalizeKey(o.poNo) === saPlanPoNorm && (
+          _normalizeKey(o.pgCode) === saPlanItemNorm ||
+          _normalizeKey(o.nfItem) === saPlanItemNorm ||
+          _normalizeKey(o.itemCode).includes(saPlanItemNorm) ||
+          saPlanItemNorm.includes(_normalizeKey(o.itemCode))
+        ));
+      }
       if (!order) {
         order = {
           poNo: plan.poNo || '',
