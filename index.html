@@ -1073,9 +1073,9 @@ const MASTER_TEMPLATE_DOC = {
     invoiceNoCell: 'M11',        // Invoice# cell (after "INVOICE#" label in L11)
     dateCellRef: 'M10',          // Date cell (after "DATE:" label in L10)
     dataStartRow: 19,            // Data rows start at row 19 (row 18 is header)
-    footerRow: 30,               // Total row
-    totalRow: 30,
-    totalQtyCol: 'F',            // F30 = Total Qty (Total Quantity column)
+    footerRow: 63,               // Total row (MasterTemplate: 44 data rows 19-62, Total at 63)
+    totalRow: 63,
+    totalQtyCol: null,           // PL Total row has no SUM formula; qty filled per-row only
     totalAmtCol: null,           // PL has no amount column
     cols: { po:'A', itemCode:'B', qty:'F' }  // Only fill PO#, Item Code, Total Qty
   }
@@ -1187,6 +1187,30 @@ function updateUndoBtn() {
   if (!btn) return;
   btn.disabled = undoStack.length === 0;
   btn.title = undoStack.length ? `Undo: ${undoStack[undoStack.length-1].label} (Ctrl+Z)` : 'Nothing to undo';
+}
+
+// ── Order Status Undo Stack ──────────────────────────────────────
+const osUndoStack = [];
+const OS_UNDO_LIMIT = 30;
+function pushOrderUndo(label) {
+  const current = loadOrderStatus();
+  osUndoStack.push({ data: JSON.parse(JSON.stringify(current)), label: label || 'edit' });
+  if (osUndoStack.length > OS_UNDO_LIMIT) osUndoStack.shift();
+  updateOsUndoBtn();
+}
+function undoOrderAction() {
+  if (!osUndoStack.length) { toast('Nothing to undo in Order Status', 'info'); return; }
+  const snapshot = osUndoStack.pop();
+  saveOrderStatus(snapshot.data);
+  updateOsUndoBtn();
+  if (typeof renderOrderStatus === 'function') renderOrderStatus();
+  toast('↩ Undone: ' + snapshot.label, 'info');
+}
+function updateOsUndoBtn() {
+  const btn = document.getElementById('btnOsUndo');
+  if (!btn) return;
+  btn.disabled = osUndoStack.length === 0;
+  btn.title = osUndoStack.length ? 'Undo: ' + osUndoStack[osUndoStack.length-1].label : 'Nothing to undo';
 }
 
 // ============================================================
@@ -3895,13 +3919,23 @@ async function downloadExcel() {
           }
         }
 
-        // ── Step 5b-shrink: Remove excess template rows if fewer data rows than template ──
+        // ── Step 5b-shrink: Handle surplus template rows (fewer data rows than template) ──
+        // Same logic as Invoice/CI: clear data in surplus rows, then remove and shift footer
         const plActualFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows);
         if (plNumRows < plTemplateDataRows) {
           const plRowsToRemove = plTemplateDataRows - plNumRows;
-          // Remove rows from plStartRow + plNumRows to plFooterRow - 1
-          for (let r = plStartRow + plNumRows; r < plFooterRow; r++) {
-            const plRemovePat = new RegExp('<row[^>]*\\sr="' + r + '"[^>]*>[\\s\\S]*?<\\/row>');
+          const plSurplusStart = plStartRow + plNumRows;
+          const plSurplusEnd = plFooterRow - 1;
+          // Step A: Clear data cells in surplus rows (preserve style attributes)
+          for (let r = plSurplusStart; r <= plSurplusEnd; r++) {
+            plXml = plXml.replace(
+              new RegExp('(<c r="[A-Z]+' + r + '"[^>]*)(?: t="[^"]*")?(>)(?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*(<\/c>)', 'g'),
+              (m, pre, gt, close) => pre + gt + close
+            );
+          }
+          // Step B: Remove surplus rows and shift footer up (compact output)
+          for (let r = plSurplusStart; r <= plSurplusEnd; r++) {
+            const plRemovePat = new RegExp('<row[^>]*\\sr="' + r + '"[^>]*>[\\s\\S]*?<\/row>');
             plXml = plXml.replace(plRemovePat, '');
           }
           // Shift footer rows up
@@ -3920,7 +3954,7 @@ async function downloadExcel() {
           }
         }
 
-        // ── Step 5b-fill: Fill Invoice No, Date ──
+                // ── Step 5b-fill: Fill Invoice No, Date ──
         if (plCfg.invoiceNoCell) {
           plXml = setCellValue(plXml, ssStrings, plCfg.invoiceNoCell, invoiceNo, 'inlineStr');
         }
@@ -7968,6 +8002,7 @@ function getClientOrders(clientKey) {
   return all[clientKey] || [];
 }
 function saveClientOrders(clientKey, orders) {
+  pushOrderUndo('edit orders');
   const all = loadOrderStatus();
   all[clientKey] = orders;
   saveOrderStatus(all);
@@ -12871,15 +12906,19 @@ function tlSyncToOrder(clientKey, plan) {
 
   if (!order.shipments) order.shipments = [];
   const plannerActualDates = (plan.actualShipments||[]).map(s => s.date);
-  // Keep invoice shipments; replace planner shipments
+  // Keep invoice shipments; replace planner shipments (rebuild from plan data)
   let updatedShipments = order.shipments.filter(s => s.source === 'invoice');
-  // Add planner actual shipments
+  // Add planner actual shipments (deduplicated by date+qty)
   (plan.actualShipments||[]).forEach(ps => {
-    updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
+    const exists = updatedShipments.some(s => s.source === 'planner' && s.shipDate === ps.date && String(s.qty) === String(ps.qty) && s.status === 'Shipped');
+    if (!exists) updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
   });
-  // Add planner planned shipments
+  // Add planner planned shipments (deduplicated by date+qty)
   (plan.plannedShipments||[]).forEach(ps => {
-    if (ps.qty > 0) updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
+    if (ps.qty > 0) {
+      const exists = updatedShipments.some(s => s.source === 'planner' && s.shipDate === ps.date && String(s.qty) === String(ps.qty) && s.status === 'Planned');
+      if (!exists) updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
+    }
   });
   order.shipments = updatedShipments;
 
@@ -12912,6 +12951,7 @@ function tlSyncToOrder(clientKey, plan) {
   }
 
   allOrders[clientKey2] = clientOrders;
+  pushOrderUndo('sync from planner');
   saveOrderStatus(allOrders);
   // Refresh Order Status display if currently visible
   if (typeof renderOrderStatus === 'function' && document.getElementById('tab-orderstatus')?.classList.contains('active')) {
@@ -13028,14 +13068,17 @@ function syncAllPlansToOrders() {
 
       // Update shipments
       if (!order.shipments) order.shipments = [];
-      // Keep invoice shipments; replace planner shipments
+      // Keep invoice shipments; replace planner shipments (rebuild from plan data, deduplicated)
       let updated = order.shipments.filter(s => s.source === 'invoice');
       (plan.actualShipments||[]).forEach(ps => {
-        updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
+        const exists = updated.some(s => s.source === 'planner' && s.shipDate === ps.date && String(s.qty) === String(ps.qty) && s.status === 'Shipped');
+        if (!exists) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
       });
-      // (invoice shipments already preserved above, no need to filter planned by date)
       (plan.plannedShipments||[]).forEach(ps => {
-        if (ps.qty > 0) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
+        if (ps.qty > 0) {
+          const exists = updated.some(s => s.source === 'planner' && s.shipDate === ps.date && String(s.qty) === String(ps.qty) && s.status === 'Planned');
+          if (!exists) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
+        }
       });
       order.shipments = updated;
 
@@ -13068,6 +13111,7 @@ function syncAllPlansToOrders() {
       }
     });
   });
+  pushOrderUndo('sync from planner');
   saveOrderStatus(allOrders);
   return syncCount;
 }
@@ -13569,6 +13613,7 @@ function parseExcelDate(val) {
       📦 Order Status
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-accent btn-sm" onclick="showAddOrderDialog()">+ Add Order</button>
+        <button id="btnOsUndo" class="btn btn-outline btn-sm" onclick="undoOrderAction()" disabled title="Nothing to undo" style="background:#fff8e1;border-color:#ffc107;color:#795548">↩ Undo</button>
         <label class="btn btn-outline btn-sm" style="cursor:pointer;background:#e8f5e9;border-color:#4caf50;color:#2e7d32">
           📥 Import from Excel
           <input type="file" id="os_excelImport" accept=".xlsx,.xls" style="display:none" onchange="handleOrderExcelImport(event)">
