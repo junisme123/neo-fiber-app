@@ -3774,57 +3774,125 @@ async function downloadExcel() {
       zip.file(ciCfg.sheetFile, ciXml);
     }
 
-    // Step 5b: Fill PL (Packing List) sheet
+    // Step 5b: Fill PL (Packing List) sheet - dynamic row handling like CI
     if (cfg.pl && cfg.hasPL) {
       const plCfg = cfg.pl;
       const plSheetFile = plCfg.sheetFile || 'xl/worksheets/sheet3.xml';
       const plZipEntry = zip.file(plSheetFile);
       if (plZipEntry) {
         let plXml = await plZipEntry.async('string');
-        // Fill Invoice No
-        if (plCfg.invoiceNoCell) {
-          plXml = setCellValue(plXml, ssStrings, plCfg.invoiceNoCell, invoiceNo, 'inlineStr');
-        }
-        // Fill Date
-        if (plCfg.dateCellRef) {
-          const plDateStr = document.getElementById('shipmentDate')?.value || document.getElementById('invoiceDate')?.value || '';
-          if (plDateStr) plXml = setCellValue(plXml, ssStrings, plCfg.dateCellRef, plDateStr, 'inlineStr');
-        }
-        // Fill data rows (PO#, Item Code, Total Qty)
         const plStartRow = plCfg.dataStartRow || 19;
         const plFooterRow = plCfg.footerRow || 30;
         const plCols = plCfg.cols || { po:'A', itemCode:'B', qty:'F' };
         const plDataRows = rows.filter(r => r && r.itemCode && r.itemCode.trim());
         const plNumRows = plDataRows.length;
-        const plTemplateRows = plFooterRow - plStartRow; // rows available in template
-        // Fill each data row
+        const plTemplateDataRows = plFooterRow - plStartRow; // rows in template (e.g. 30-19=11)
+
+        // ── Step 5b-pre: Clone template row if more data rows needed ──
+        if (plNumRows > 1) {
+          const plExistingRowNums = new Set();
+          const plRowScanPre = /<row[^>]*\sr="(\d+)"/g;
+          let plMPre;
+          while ((plMPre = plRowScanPre.exec(plXml)) !== null) {
+            plExistingRowNums.add(parseInt(plMPre[1]));
+          }
+          const plTemplateRowPat = new RegExp(`<row\b([^>]*?)\br="${plStartRow}"([^>]*)>([\s\S]*?)<\/row>`);
+          const plTemplateRowMatch = plXml.match(plTemplateRowPat);
+          if (plTemplateRowMatch) {
+            const plTemplateRowFull = plTemplateRowMatch[0];
+            const plRowsToInsert = [];
+            for (let i = 1; i < plNumRows; i++) {
+              const newRowNum = plStartRow + i;
+              if (!plExistingRowNums.has(newRowNum)) {
+                // Clone template row with new row number
+                let newRow = plTemplateRowFull
+                  .replace(new RegExp('(\s)r="' + plStartRow + '"'), '$1r="' + newRowNum + '"')
+                  .replace(new RegExp('r="([A-Z]+)' + plStartRow + '"', 'g'), 'r="$1' + newRowNum + '"');
+                // Clear values in cloned row
+                newRow = newRow.replace(/<v>[^<]*<\/v>/g, '<v></v>');
+                newRow = newRow.replace(/<t>[^<]*<\/t>/g, '<t></t>');
+                plRowsToInsert.push(newRow);
+              }
+            }
+            if (plRowsToInsert.length > 0) {
+              // Shift footer rows down
+              const plRowsAdded = plRowsToInsert.length;
+              const plAllRowNums = [];
+              const plRowScan2 = /<row[^>]*\sr="(\d+)"/g;
+              let plM2;
+              while ((plM2 = plRowScan2.exec(plXml)) !== null) {
+                const rn = parseInt(plM2[1]);
+                if (rn >= plFooterRow) plAllRowNums.push(rn);
+              }
+              plAllRowNums.sort((a, b) => b - a);
+              for (const oldRow of plAllRowNums) {
+                const newRow = oldRow + plRowsAdded;
+                plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
+                plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
+              }
+              // Insert new rows before the (shifted) footer row
+              const newFooterRow = plFooterRow + plRowsAdded;
+              const plInsertAnchor = new RegExp('(<row[^>]*\sr="' + newFooterRow + '"[^>]*>[\s\S]*?<\/row>)');
+              plXml = plXml.replace(plInsertAnchor, plRowsToInsert.join('') + '$1');
+            }
+          }
+        }
+
+        // ── Step 5b-shrink: Remove excess template rows if fewer data rows than template ──
+        const plActualFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows);
+        if (plNumRows < plTemplateDataRows) {
+          const plRowsToRemove = plTemplateDataRows - plNumRows;
+          // Remove rows from plStartRow + plNumRows to plFooterRow - 1
+          for (let r = plStartRow + plNumRows; r < plFooterRow; r++) {
+            const plRemovePat = new RegExp('<row[^>]*\sr="' + r + '"[^>]*>[\s\S]*?<\/row>');
+            plXml = plXml.replace(plRemovePat, '');
+          }
+          // Shift footer rows up
+          const plAllRowNums2 = [];
+          const plRowScan3 = /<row[^>]*\sr="(\d+)"/g;
+          let plM3;
+          while ((plM3 = plRowScan3.exec(plXml)) !== null) {
+            const rn = parseInt(plM3[1]);
+            if (rn >= plFooterRow) plAllRowNums2.push(rn);
+          }
+          plAllRowNums2.sort((a, b) => b - a);
+          for (const oldRow of plAllRowNums2) {
+            const newRow = oldRow - plRowsToRemove;
+            plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
+            plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
+          }
+        }
+
+        // ── Step 5b-fill: Fill Invoice No, Date ──
+        if (plCfg.invoiceNoCell) {
+          plXml = setCellValue(plXml, ssStrings, plCfg.invoiceNoCell, invoiceNo, 'inlineStr');
+        }
+        if (plCfg.dateCellRef) {
+          const plDateStr = document.getElementById('shipmentDate')?.value || invoiceDate || '';
+          if (plDateStr) plXml = setCellValue(plXml, ssStrings, plCfg.dateCellRef, plDateStr, 'inlineStr');
+        }
+
+        // ── Step 5b-data: Fill data rows (PO#, Item Code, Total Qty) ──
+        const plFinalFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows) - Math.max(0, plTemplateDataRows - plNumRows);
         plDataRows.forEach((r, i) => {
           const rowNum = plStartRow + i;
-          if (rowNum >= plFooterRow) return; // don't overwrite total row
           if (plCols.po)       plXml = setCellValue(plXml, ssStrings, plCols.po + rowNum, r.po || '', 'inlineStr');
           if (plCols.itemCode) plXml = setCellValue(plXml, ssStrings, plCols.itemCode + rowNum, r.itemCode || '', 'inlineStr');
           if (plCols.qty)      plXml = setCellValue(plXml, ssStrings, plCols.qty + rowNum, String(parseFloat(r.qty) || 0), 'number');
         });
-        // Fill total qty
-        if (plCfg.totalQtyCol && plCfg.totalRow) {
+
+        // ── Step 5b-total: Fill total qty ──
+        if (plCfg.totalQtyCol) {
           const plTotalQty = plDataRows.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0);
-          plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plCfg.totalRow, String(plTotalQty), 'number');
+          const plComputedTotalRow = plFinalFooterRow;
+          plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plComputedTotalRow, String(plTotalQty), 'number');
+          // Update SUM formula in total row
+          plXml = plXml.replace(
+            new RegExp('SUM\(' + plCols.qty + '\d+:' + plCols.qty + '\d+\)', 'g'),
+            'SUM(' + plCols.qty + plStartRow + ':' + plCols.qty + (plStartRow + plNumRows - 1) + ')'
+          );
         }
-        // Apply customer Ship To info to PL
-        if (custInfo) {
-          // PL Ship To is in A10-A15 area (same as CI ship cells if available)
-          const ccCode = isCustomClient ? clientKey.replace('custom_', '') : null;
-          const ccObj = ccCode ? customClients.find(c => c.code === ccCode) : null;
-          const plShipCells = ccObj && ccObj.templateConfig && ccObj.templateConfig.pl && ccObj.templateConfig.pl.shipCells;
-          if (plShipCells && plShipCells.length > 0) {
-            for (const [cell, field] of plShipCells) {
-              let val;
-              if (field === 'attn_prefixed') val = custInfo.attn ? 'Attn : ' + custInfo.attn : '';
-              else val = custInfo[field] || '';
-              if (val) plXml = setCellValue(plXml, ssStrings, cell, val, 'inlineStr');
-            }
-          }
-        }
+
         zip.file(plSheetFile, plXml);
       }
     }
@@ -4028,8 +4096,11 @@ async function downloadExcel() {
 
       cfLines.forEach(line => {
         // Determine which PO this line belongs to (per-row PO takes priority)
-        const linePO = (line.po || '').trim() || linkedPONo;
-        if (!linePO) return; // skip lines with no PO
+        const linePO = (line.po || '').trim();
+        if (!linePO) {
+          console.log('[OS Update] Skipping line - no PO number in row:', line.itemCode);
+          return; // skip lines with no per-row PO
+        }
 
         // Find all orders for this PO
         const poOrders = allOrders.filter(o => String(o.poNo || '').trim() === String(linePO).trim());
@@ -4097,14 +4168,14 @@ async function downloadExcel() {
         }
       });
 
-      if (cfLines.some(l => (l.po || '').trim() || linkedPONo)) {
+      if (cfLines.some(l => (l.po || '').trim())) {
         saveClientOrders(cfClientKey, allOrders);
         // Re-render Order Status if currently on that tab
         if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
           renderOrderStatus();
         }
         if (osUpdatedCount > 0) {
-          const updatedPOs = [...new Set(cfLines.map(l => (l.po || '').trim() || linkedPONo).filter(Boolean))];
+          const updatedPOs = [...new Set(cfLines.map(l => (l.po || '').trim()).filter(Boolean))];
           toast(`✓ Order Status updated: ${osUpdatedCount} line(s) across PO(s) ${updatedPOs.join(', ')}`, 'success');
           console.log('[OS Update] Updated', osUpdatedCount, 'lines across POs:', updatedPOs);
         }
@@ -7981,23 +8052,21 @@ function syncOrderStatusFromInvoices() {
     let linesMatched = 0;
     let linesSkipped = 0;
 
-    // Determine fallback PO for lines without a per-row PO
-    // History stores: inv.linkedPO (from _hLinkedPO = invoiceLinkedPO field)
-    //                 inv.headerPO (from _hHeaderPO = headerPO field)
-    // Cashflow stores: inv.linkedPO (same field name)
-    const invFallbackPO = (inv.linkedPO || '').trim() || (inv.headerPO || '').trim();
-
-    // If no lines have po field, try to get POs from cashflow records
+    // Build unified lines: prefer Cashflow records (has per-row PO), fallback to History lines
     const cfRecord = (loadCashflowRecords() || []).find(r => r.invoiceNo === invoiceNo);
-    const cfLines = cfRecord ? (cfRecord.lines || []) : [];
-
+    const cfLinesFromRecord = cfRecord ? (cfRecord.lines || []) : [];
+    const histLines = inv.lines || [];
+    const lines = cfLinesFromRecord.length > 0
+      ? cfLinesFromRecord.map((cf, i) => {
+          const hl = histLines[i] || {};
+          return { po: (cf.po || hl.po || '').trim(), itemCode: cf.itemCode || hl.itemCode || '',
+            nfItem: cf.nfItem || hl.nfItem || hl.nfSpec || '', qty: parseFloat(cf.qty) || parseFloat(hl.qty) || 0 };
+        })
+      : histLines.map(hl => ({ po: (hl.po || '').trim(), itemCode: hl.itemCode || '',
+          nfItem: hl.nfItem || hl.nfSpec || '', qty: parseFloat(hl.qty) || 0 }));
+    if (lines.length === 0) { console.log('[Sync] No lines for invoice:', invoiceNo); return; }
     lines.forEach((line, lineIdx) => {
-      // Support both cfLines format {po, itemCode, qty} and _hLines format {po, itemCode, qty}
-      // Also try matching with cfLines by index (same order)
-      const cfLine = cfLines[lineIdx];
-      const linePO = (line.po || '').trim()
-        || (cfLine && cfLine.po ? cfLine.po.trim() : '')
-        || invFallbackPO;
+      const linePO = (line.po || '').trim();
       const lineQty = parseFloat(line.qty) || 0;
       const lineItemCode = (line.itemCode || '').toLowerCase().trim();
       const lineNfItem = (line.nfItem || line.nfSpec || '').toLowerCase().trim();
