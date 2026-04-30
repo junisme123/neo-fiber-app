@@ -4812,57 +4812,106 @@ function resetCustInfo(key) {
 // restores stockOnHand, and recalculates poStatus for each affected order.
 function rollbackOrderStatusForInvoice(invoiceRecord) {
   if (!invoiceRecord) return 0;
-  const clientKey = invoiceRecord.clientKey || '';
-  const invoiceNo  = invoiceRecord.invoiceNo  || '';
-  const lines      = invoiceRecord.lines      || [];
-  if (!clientKey || !invoiceNo) return 0;
+  const invoiceNo = (invoiceRecord.invoiceNo || '').trim();
+  if (!invoiceNo) { console.warn('[OS Rollback] No invoiceNo in record:', invoiceRecord); return 0; }
 
-  const allOrders = getClientOrders(clientKey);
-  if (!allOrders || allOrders.length === 0) return 0;
+  const rawClientKey = (invoiceRecord.clientKey || '').trim();
+  console.log('[OS Rollback] Starting rollback for invoice:', invoiceNo, '| clientKey:', rawClientKey);
 
-  let rolledBack = 0;
+  // Build list of clientKeys to try: the stored key + all CLIENT_CONFIGS keys + all custom keys
+  // This handles cases where the stored clientKey format may differ from the storage key
+  const allStorageData = loadOrderStatus(); // { storageKey: [orders] }
+  const storageKeys = Object.keys(allStorageData);
+  console.log('[OS Rollback] All storage keys:', storageKeys);
 
-  allOrders.forEach(order => {
-    if (!order.shipments || order.shipments.length === 0) return;
+  // Determine which keys to search
+  let keysToSearch = [];
+  if (rawClientKey) {
+    // Try exact match first, then case-insensitive
+    const exactMatch = storageKeys.find(k => k === rawClientKey);
+    const caseMatch  = storageKeys.find(k => k.toLowerCase() === rawClientKey.toLowerCase());
+    if (exactMatch) keysToSearch.push(exactMatch);
+    else if (caseMatch) keysToSearch.push(caseMatch);
+    // Also add all keys as fallback (to catch any mismatches)
+    storageKeys.forEach(k => { if (!keysToSearch.includes(k)) keysToSearch.push(k); });
+  } else {
+    // No clientKey stored - scan all
+    keysToSearch = storageKeys;
+  }
+  console.log('[OS Rollback] Keys to search:', keysToSearch);
 
-    // Find shipment(s) that belong to this invoice
-    const before = order.shipments.length;
-    const removed = order.shipments.filter(s =>
-      s.invoiceNo === invoiceNo || s.tracking === invoiceNo
-    );
-    order.shipments = order.shipments.filter(s =>
-      s.invoiceNo !== invoiceNo && s.tracking !== invoiceNo
-    );
-    const removedCount = before - order.shipments.length;
-    if (removedCount === 0) return;
+  let totalRolledBack = 0;
+  const affectedKeys = new Set();
 
-    rolledBack += removedCount;
+  keysToSearch.forEach(ck => {
+    const orders = allStorageData[ck] || [];
+    let changed = false;
 
-    // Restore stockOnHand: add back the qty that was subtracted
-    const restoredQty = removed.reduce((s, sh) => s + (sh.qty || 0), 0);
-    order.stockOnHand = (order.stockOnHand || 0) + restoredQty;
+    orders.forEach(order => {
+      if (!order.shipments || order.shipments.length === 0) return;
 
-    // Recalculate poStatus: only count confirmed 'Shipped' records
-    const totalShipped = order.shipments.filter(sh => sh.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
-    const totalQty     = order.qty || 0;
-    if (totalShipped <= 0) {
-      order.poStatus = 'pending';
-    } else if (totalShipped >= totalQty && totalQty > 0) {
-      order.poStatus = 'complete';
-    } else {
-      order.poStatus = 'partial';
+      const before = order.shipments.length;
+      const removedShips = order.shipments.filter(s =>
+        (s.invoiceNo && s.invoiceNo === invoiceNo) ||
+        (s.tracking  && s.tracking  === invoiceNo)
+      );
+      if (removedShips.length === 0) return;
+
+      order.shipments = order.shipments.filter(s =>
+        !(s.invoiceNo === invoiceNo || s.tracking === invoiceNo)
+      );
+      const removedCount = before - order.shipments.length;
+      totalRolledBack += removedCount;
+      changed = true;
+
+      // Restore stockOnHand: add back only Shipped qty that was subtracted
+      const restoredQty = removedShips
+        .filter(sh => sh.status === 'Shipped')
+        .reduce((s, sh) => s + (sh.qty || 0), 0);
+      order.stockOnHand = (order.stockOnHand || 0) + restoredQty;
+
+      // Recalculate poStatus: only count confirmed 'Shipped' records
+      const totalShipped = order.shipments
+        .filter(sh => sh.status === 'Shipped')
+        .reduce((s, sh) => s + (sh.qty || 0), 0);
+      const totalQty = order.qty || 0;
+      if (totalShipped <= 0) {
+        order.poStatus = 'pending';
+      } else if (totalShipped >= totalQty && totalQty > 0) {
+        order.poStatus = 'complete';
+      } else {
+        order.poStatus = 'partial';
+      }
+      console.log('[OS Rollback] Removed', removedCount, 'shipment(s) from order', order.poNo, order.itemCode, '| new poStatus:', order.poStatus);
+    });
+
+    if (changed) {
+      affectedKeys.add(ck);
+      allStorageData[ck] = orders;
     }
   });
 
-  if (rolledBack > 0) {
-    saveClientOrders(clientKey, allOrders);
+  if (totalRolledBack > 0) {
+    // Save all affected clients at once
+    saveOrderStatus(allStorageData);
     // Re-render Order Status if currently on that tab
     if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
       renderOrderStatus();
     }
-    console.log('[OS Rollback] Removed', rolledBack, 'shipment record(s) for invoice', invoiceNo);
+    console.log('[OS Rollback] Done. Removed', totalRolledBack, 'shipment record(s) for invoice', invoiceNo, '| affected clients:', [...affectedKeys]);
+  } else {
+    console.warn('[OS Rollback] No shipment records found for invoice:', invoiceNo, '| searched keys:', keysToSearch);
+    // Debug: show what shipments exist
+    keysToSearch.slice(0, 3).forEach(ck => {
+      const orders = allStorageData[ck] || [];
+      orders.forEach(o => {
+        if (o.shipments && o.shipments.length > 0) {
+          console.log('[OS Rollback Debug] Client:', ck, '| PO:', o.poNo, '| shipments:', JSON.stringify(o.shipments.map(s => ({invoiceNo: s.invoiceNo, tracking: s.tracking, qty: s.qty}))));
+        }
+      });
+    });
   }
-  return rolledBack;
+  return totalRolledBack;
 }
 
 function deleteHistory(idx) {
