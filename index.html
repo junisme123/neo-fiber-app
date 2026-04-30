@@ -3900,6 +3900,7 @@ async function downloadExcel() {
     const cfLines = rows
       .filter(r => r && r.itemCode && r.itemCode.trim())
       .map(r => ({
+        po: r.po || '',           // per-row PO number (column A)
         itemCode: r.itemCode || '',
         flex: r.flex || '',
         nfItem: r.nfItem || '',
@@ -3930,90 +3931,88 @@ async function downloadExcel() {
       recordedAt: new Date().toISOString()
     });
 
-    // For ALL clients: update Order Status shipment records from Invoice
-    // Use the linked PO from the invoice header
-
-    console.log('[OS Update] linkedPONo:', linkedPONo, '| cfClientKey:', cfClientKey, '| invoiceShipmentDate:', invoiceShipmentDate);
-    if (linkedPONo) {
-      // Update Order Status: add shipment record + update plannedShipDate
+    // ── Update Order Status: support multi-PO invoices ──────────────────────────
+    // Each cfLine now carries its own .po field (from column A of the invoice table).
+    // Group lines by their per-row PO number; fall back to linkedPONo (header field)
+    // if the row-level PO is blank.
+    console.log('[OS Update] cfClientKey:', cfClientKey, '| linkedPONo:', linkedPONo, '| invoiceShipmentDate:', invoiceShipmentDate);
+    {
       const allOrders = getClientOrders(cfClientKey);
-      console.log('[OS Update] allOrders count:', allOrders.length, '| PO nos:', [...new Set(allOrders.map(o=>o.poNo))]);
-      const matchingOrders = allOrders.filter(o => o.poNo === linkedPONo);
-      console.log('[OS Update] matchingOrders:', matchingOrders.length, '| cfLines:', cfLines.map(l=>l.itemCode));
-      if (matchingOrders.length > 0) {
-        // Add shipment records for each matched order line
-        cfLines.forEach(line => {
-          const matchedOrder = matchingOrders.find(o =>
-            (o.itemCode || '').toLowerCase() === (line.itemCode || '').toLowerCase()
-          ) || matchingOrders[0];
-          if (matchedOrder) {
-            if (!matchedOrder.shipments) matchedOrder.shipments = [];
-            // Check if this invoice already recorded (use invoiceNo as unique key)
-            const alreadyRecorded = matchedOrder.shipments.some(s =>
-              s.invoiceNo === invoiceNo || s.tracking === invoiceNo
-            );
-            if (!alreadyRecorded) {
-              matchedOrder.shipments.push({
-                shipDate: invoiceShipmentDate,
-                qty: line.qty,
-                invoiceNo: invoiceNo,
-                status: 'Shipped'
-              });
-            }
-            // Overwrite plannedShipDate with invoice shipment date
-            if (invoiceShipmentDate) {
-              matchedOrder.plannedShipDate = invoiceShipmentDate;
-            }
-            // Update poStatus to reflect shipment
-            const totalShipped = (matchedOrder.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
-            if (totalShipped >= (matchedOrder.qty || 0)) {
-              matchedOrder.poStatus = 'complete';
-            } else if (totalShipped > 0) {
-              matchedOrder.poStatus = 'partial';
-            }
-            // Update stock on hand
-            matchedOrder.stockOnHand = Math.max(0, (matchedOrder.stockOnHand || 0) - (line.qty || 0));
-          }
-        });
+      let osUpdatedCount = 0;
+
+      cfLines.forEach(line => {
+        // Determine which PO this line belongs to (per-row PO takes priority)
+        const linePO = (line.po || '').trim() || linkedPONo;
+        if (!linePO) return; // skip lines with no PO
+
+        // Find all orders for this PO
+        const poOrders = allOrders.filter(o => String(o.poNo || '').trim() === String(linePO).trim());
+        if (poOrders.length === 0) {
+          console.log('[OS Update] No orders found for PO:', linePO);
+          return;
+        }
+
+        const lcItem = (line.itemCode || '').toLowerCase().trim();
+        const lcNf   = (line.nfItem   || '').toLowerCase().trim();
+
+        // Match priority:
+        // 1) exact PG itemCode match
+        // 2) exact NF item code match (nfSpec or nfItem field)
+        // 3) first order in the PO as fallback
+        const matchedOrder =
+          poOrders.find(o => (o.itemCode || '').toLowerCase().trim() === lcItem) ||
+          poOrders.find(o => (o.nfSpec   || '').toLowerCase().trim() === lcNf)   ||
+          poOrders.find(o => (o.nfItem   || '').toLowerCase().trim() === lcNf)   ||
+          poOrders[0];
+
+        if (!matchedOrder) return;
+
+        if (!matchedOrder.shipments) matchedOrder.shipments = [];
+
+        // Avoid double-recording the same invoice line
+        const alreadyRecorded = matchedOrder.shipments.some(s =>
+          (s.invoiceNo === invoiceNo || s.tracking === invoiceNo) &&
+          s.qty === line.qty
+        );
+        if (!alreadyRecorded) {
+          matchedOrder.shipments.push({
+            shipDate: invoiceShipmentDate || invoiceDate,
+            qty: line.qty,
+            invoiceNo: invoiceNo,
+            status: 'Shipped'
+          });
+          osUpdatedCount++;
+        }
+
+        // Update plannedShipDate
+        if (invoiceShipmentDate) matchedOrder.plannedShipDate = invoiceShipmentDate;
+
+        // Recalculate poStatus
+        const totalShipped = matchedOrder.shipments.reduce((s, sh) => s + (sh.qty || 0), 0);
+        if (totalShipped >= (matchedOrder.qty || 0) && totalShipped > 0) {
+          matchedOrder.poStatus = 'complete';
+        } else if (totalShipped > 0) {
+          matchedOrder.poStatus = 'partial';
+        }
+
+        // Update stockOnHand
+        matchedOrder.stockOnHand = Math.max(0, (matchedOrder.stockOnHand || 0) - line.qty);
+      });
+
+      if (cfLines.some(l => (l.po || '').trim() || linkedPONo)) {
         saveClientOrders(cfClientKey, allOrders);
         // Re-render Order Status if currently on that tab
         if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
           renderOrderStatus();
         }
-        toast(`✓ Order Status updated for PO ${linkedPONo}`, 'success');
-      }
-    } else if (isPgClient) {
-      // Legacy PG fallback: use first row PO
-      const poNoFromRow = rows.length > 0 ? (rows[0].po || '') : '';
-      if (poNoFromRow) {
-        const pgOrders = getClientOrders(cfClientKey);
-        // Find orders matching this PO
-        const matchingOrders = pgOrders.map((o, idx) => ({ o, idx })).filter(({ o }) => o.poNo === poNoFromRow);
-        if (matchingOrders.length > 0) {
-          // Add a shipment record for each matching order line
-          cfLines.forEach(line => {
-            const match = matchingOrders.find(({ o }) => o.itemCode === line.itemCode);
-            if (match) {
-              if (!pgOrders[match.idx].shipments) pgOrders[match.idx].shipments = [];
-              // Check if shipment with this invoiceNo already exists
-              const existingShip = pgOrders[match.idx].shipments.findIndex(s => s.tracking === invoiceNo);
-              const shipRecord = {
-                shipDate: invoiceDate,
-                qty: line.qty,
-                tracking: invoiceNo,
-                status: 'Shipped',
-                notes: 'From Invoice ' + invoiceNo
-              };
-              if (existingShip >= 0) pgOrders[match.idx].shipments[existingShip] = shipRecord;
-              else pgOrders[match.idx].shipments.push(shipRecord);
-            }
-          });
-          saveClientOrders(cfClientKey, pgOrders);
+        if (osUpdatedCount > 0) {
+          const updatedPOs = [...new Set(cfLines.map(l => (l.po || '').trim() || linkedPONo).filter(Boolean))];
+          toast(`✓ Order Status updated: ${osUpdatedCount} line(s) across PO(s) ${updatedPOs.join(', ')}`, 'success');
+          console.log('[OS Update] Updated', osUpdatedCount, 'lines across POs:', updatedPOs);
         }
       }
     }
-
-    toast(`✓ Downloaded: ${filename}`, 'success');
+        toast(`✓ Downloaded: ${filename}`, 'success');
 
   } catch(err) {
     console.error(err);
