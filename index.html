@@ -12107,7 +12107,7 @@ function renderShipmentPlannerTimeline() {
       const bg = i % 2 === 0 ? 'white' : '#f8fafc';
       const status = computeSpStatus(p);
       const statusBadge = {complete:'🟢 Complete', partial:'🟡 Partial', planned:'🔵 Planned', pending:'⏳ Pending'}[status] || status;
-      h2 += '<tr style="background:' + bg + ';cursor:pointer" onclick="editSpPlan('' + esc(p._clientKey||'') + '',' + (p.id||0) + ')">';
+      h2 += '<tr style="background:' + bg + ';cursor:pointer" onclick="editSpPlan(\'' + esc(p._clientKey||'') + '\',' + (p.id||0) + ')">';
       h2 += '<td style="padding:7px 10px;font-weight:700;color:#1e40af">' + esc(p.poNo||'') + '</td>';
       h2 += '<td style="padding:7px 10px">' + esc(p.itemCode||'') + '</td>';
       h2 += '<td style="padding:7px 10px;color:#64748b">' + esc(p._clientLabel||p._clientKey||'') + '</td>';
