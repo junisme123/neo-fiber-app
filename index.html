@@ -4142,7 +4142,8 @@ async function downloadExcel() {
             shipDate: _shipDateStr,
             qty: line.qty,
             invoiceNo: invoiceNo,
-            status: _shipStatus
+            status: _shipStatus,
+            source: 'invoice'
           });
           osUpdatedCount++;
         }
@@ -5018,7 +5019,7 @@ function rollbackOrderStatusForInvoice(invoiceRecord) {
       if (removedShips.length === 0) return;
 
       order.shipments = order.shipments.filter(s =>
-        !(s.invoiceNo === invoiceNo || s.tracking === invoiceNo)
+        !((s.invoiceNo === invoiceNo || s.tracking === invoiceNo) && s.source !== 'planner')
       );
       const removedCount = before - order.shipments.length;
       totalRolledBack += removedCount;
@@ -8077,7 +8078,7 @@ function syncOrderStatusFromInvoices() {
   Object.keys(allOrderData).forEach(ck => {
     (allOrderData[ck] || []).forEach(order => {
       if (!order.shipments) return;
-      order.shipments = order.shipments.filter(s => !s.invoiceNo && !s._fromInvoice);
+      order.shipments = order.shipments.filter(s => s.source === 'planner' || (!s.invoiceNo && !s._fromInvoice));
     });
   });
 
@@ -8151,6 +8152,7 @@ function syncOrderStatusFromInvoices() {
         qty: lineQty,
         invoiceNo: invoiceNo,
         status: shipStatus,
+        source: 'invoice',
         carrier: '',
         tracking: ''
       });
@@ -11602,6 +11604,29 @@ function editSpPlan(clientKey, planId) {
 }
 
 function deleteSpPlanRow(clientKey, planId) {
+  // Remove planner shipments from Order Status before deleting
+  const planToDelete = (spPlans[clientKey] || []).find(p => p.id === planId);
+  if (planToDelete) {
+    const allOrders = loadOrderStatus();
+    const ckVariants = [clientKey, clientKey.toUpperCase(), clientKey.replace(/^custom_/i,''), clientKey.toLowerCase()];
+    let resolvedCk = clientKey;
+    for (const v of ckVariants) { if (allOrders[v]) { resolvedCk = v; break; } }
+    if (allOrders[resolvedCk]) {
+      const planPoNorm = _normalizeKey(planToDelete.poNo);
+      const planItemNorm = _normalizeKey(planToDelete.itemCode);
+      const order = allOrders[resolvedCk].find(o =>
+        _normalizeKey(o.poNo) === planPoNorm && (
+          _normalizeKey(o.itemCode) === planItemNorm ||
+          _normalizeKey(o.pgCode) === planItemNorm ||
+          _normalizeKey(o.nfItem) === planItemNorm
+        )
+      );
+      if (order && order.shipments) {
+        order.shipments = order.shipments.filter(s => s.source !== 'planner');
+        saveOrderStatus(allOrders);
+      }
+    }
+  }
   deleteSpPlan(clientKey, planId);
   toast('✓ Plan deleted', 'success');
   renderShipmentPlanner();
@@ -12651,16 +12676,15 @@ function tlSyncToOrder(clientKey, plan) {
 
   if (!order.shipments) order.shipments = [];
   const plannerActualDates = (plan.actualShipments||[]).map(s => s.date);
-  let updatedShipments = order.shipments.filter(s => !plannerActualDates.includes(s.shipDate));
+  // Keep invoice shipments; replace planner shipments
+  let updatedShipments = order.shipments.filter(s => s.source === 'invoice');
+  // Add planner actual shipments
   (plan.actualShipments||[]).forEach(ps => {
-    updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', carrier: '', tracking: '' });
+    updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
   });
-  order.shipments = updatedShipments;
-
-  const plannerPlannedDates = (plan.plannedShipments||[]).map(s => s.date);
-  updatedShipments = order.shipments.filter(s => s.status !== 'Planned' || !plannerPlannedDates.includes(s.shipDate));
+  // Add planner planned shipments
   (plan.plannedShipments||[]).forEach(ps => {
-    if (ps.qty > 0) updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', carrier: '', tracking: '' });
+    if (ps.qty > 0) updatedShipments.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
   });
   order.shipments = updatedShipments;
 
@@ -13021,12 +13045,23 @@ function confirmSpImport() {
   });
   
   saveSpPlans();
+
+  // Sync each imported plan to Order Status
+  selected.forEach(({ sheet, clientKey }) => {
+    if (!clientKey) return;
+    (spPlans[clientKey] || []).forEach(plan => {
+      if (plan.plannedShipments && plan.plannedShipments.length > 0) {
+        tlSyncToOrder(clientKey, plan);
+      }
+    });
+  });
+
   _spImportWb = null;
   window._spImportSelected = null;
   window._spImportData = null;
   closeModal();
   renderShipmentPlanner();
-  toast('Imported ' + totalImported + ' shipment plans', 'success');
+  toast('Imported ' + totalImported + ' shipment plans & synced to Order Status', 'success');
 }
 
 function parseSpDate(val) {
