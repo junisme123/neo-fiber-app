@@ -3975,11 +3975,16 @@ async function downloadExcel() {
           s.qty === line.qty
         );
         if (!alreadyRecorded) {
+          // Determine status: Planned if shipDate is in the future, Shipped if today or past
+          const _shipDateStr = invoiceShipmentDate || invoiceDate;
+          const _today = new Date(); _today.setHours(0, 0, 0, 0);
+          const _shipD  = _shipDateStr ? new Date(_shipDateStr) : null;
+          const _shipStatus = (_shipD && _shipD <= _today) ? 'Shipped' : 'Planned';
           matchedOrder.shipments.push({
-            shipDate: invoiceShipmentDate || invoiceDate,
+            shipDate: _shipDateStr,
             qty: line.qty,
             invoiceNo: invoiceNo,
-            status: 'Shipped'
+            status: _shipStatus
           });
           osUpdatedCount++;
         }
@@ -3987,16 +3992,23 @@ async function downloadExcel() {
         // Update plannedShipDate
         if (invoiceShipmentDate) matchedOrder.plannedShipDate = invoiceShipmentDate;
 
-        // Recalculate poStatus
-        const totalShipped = matchedOrder.shipments.reduce((s, sh) => s + (sh.qty || 0), 0);
+        // Recalculate poStatus: only count confirmed 'Shipped' records
+        const totalShipped = matchedOrder.shipments
+          .filter(sh => sh.status === 'Shipped')
+          .reduce((s, sh) => s + (sh.qty || 0), 0);
         if (totalShipped >= (matchedOrder.qty || 0) && totalShipped > 0) {
           matchedOrder.poStatus = 'complete';
         } else if (totalShipped > 0) {
           matchedOrder.poStatus = 'partial';
+        } else {
+          matchedOrder.poStatus = matchedOrder.poStatus || 'pending';
         }
 
-        // Update stockOnHand
-        matchedOrder.stockOnHand = Math.max(0, (matchedOrder.stockOnHand || 0) - line.qty);
+        // Update stockOnHand only for confirmed shipped qty
+        // (Planned shipments don't reduce stock yet)
+        if (_shipStatus === 'Shipped') {
+          matchedOrder.stockOnHand = Math.max(0, (matchedOrder.stockOnHand || 0) - line.qty);
+        }
       });
 
       if (cfLines.some(l => (l.po || '').trim() || linkedPONo)) {
@@ -4830,8 +4842,8 @@ function rollbackOrderStatusForInvoice(invoiceRecord) {
     const restoredQty = removed.reduce((s, sh) => s + (sh.qty || 0), 0);
     order.stockOnHand = (order.stockOnHand || 0) + restoredQty;
 
-    // Recalculate poStatus
-    const totalShipped = order.shipments.reduce((s, sh) => s + (sh.qty || 0), 0);
+    // Recalculate poStatus: only count confirmed 'Shipped' records
+    const totalShipped = order.shipments.filter(sh => sh.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
     const totalQty     = order.qty || 0;
     if (totalShipped <= 0) {
       order.poStatus = 'pending';
@@ -7664,9 +7676,42 @@ function saveInlinePrice(orderIdx, newPriceStr) {
   toast(`✓ Price updated: ${orders[orderIdx].itemCode || ''} → USD ${newPrice.toFixed(2)}`, 'success');
 }
 
+// ── Auto-update Planned → Shipped when date has passed ───────
+// Call this whenever Order Status is rendered to keep statuses current.
+function autoUpdateShipmentStatuses(clientKey) {
+  const allOrders = getClientOrders(clientKey);
+  if (!allOrders || allOrders.length === 0) return;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let changed = false;
+  allOrders.forEach(order => {
+    if (!order.shipments) return;
+    order.shipments.forEach(sh => {
+      if (sh.status === 'Planned' && sh.shipDate) {
+        const d = new Date(sh.shipDate);
+        if (d <= today) {
+          sh.status = 'Shipped';
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      // Recalculate poStatus after auto-update
+      const totalShipped = order.shipments.filter(s => s.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
+      const totalQty = order.qty || 0;
+      if (totalShipped >= totalQty && totalQty > 0) order.poStatus = 'complete';
+      else if (totalShipped > 0) order.poStatus = 'partial';
+      else order.poStatus = order.poStatus || 'pending';
+    }
+  });
+  if (changed) saveClientOrders(clientKey, allOrders);
+}
+
 function computeOrderStatus(order, clientKey) {
   const totalQty = order.qty || 0;
-  const shippedQty = (order.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
+  // Only count confirmed 'Shipped' records (not 'Planned') toward shipped quantity
+  const shippedQty = (order.shipments || [])
+    .filter(sh => sh.status === 'Shipped')
+    .reduce((s, sh) => s + (sh.qty || 0), 0);
   const orderDate = order.orderDate ? new Date(order.orderDate) : null;
   // Auto-compute based on shipments
   if (shippedQty >= totalQty && totalQty > 0) return 'complete';
@@ -7747,6 +7792,8 @@ function switchOsView(mode) {
 
 // ── Render main table ─────────────────────────────────────────
 function renderOrderStatus() {
+  // Auto-update any Planned shipments whose date has now passed
+  autoUpdateShipmentStatuses(osCurrentClient);
   const orders = getClientOrders(osCurrentClient);
   const poFilterEl = document.getElementById('os_poFilter');
   const statusFilterEl = document.getElementById('os_statusFilter');
@@ -7791,7 +7838,7 @@ function renderOrderStatus() {
         case 'version':     return (o.version || '').toLowerCase();
         case 'colour':      return (o.colour || '').toLowerCase();
         case 'qty':         return o.qty || 0;
-        case 'shipped':     return (o.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
+        case 'shipped':     return (o.shipments || []).filter(sh => sh.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
         case 'remaining':   return (o.qty || 0) - (o.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
         case 'unitPrice':   return o.unitPrice || 0;
         case 'poStatus':    return computeOrderStatus(o);
@@ -7809,7 +7856,7 @@ function renderOrderStatus() {
   // Summary stats (use all orders for accurate totals)
   const totalOrders = filtered.length;
   const totalQty = filtered.reduce((s, {order: o}) => s + (o.qty || 0), 0);
-  const shippedQty = filtered.reduce((s, {order: o}) => s + (o.shipments || []).reduce((ss, sh) => ss + (sh.qty || 0), 0), 0);
+  const shippedQty = filtered.reduce((s, {order: o}) => s + (o.shipments || []).filter(sh => sh.status === 'Shipped').reduce((ss, sh) => ss + (sh.qty || 0), 0), 0);
   const remainQty = totalQty - shippedQty;
   const tbdCount = filtered.filter(({order: o}) => computeOrderStatus(o) === 'tbd').length;
   const totalValue = filtered.reduce((s, {order: o}) => s + ((o.qty || 0) * (o.unitPrice || 0)), 0);
@@ -7900,7 +7947,7 @@ function renderOrderStatus() {
   Object.entries(poGroups).forEach(([poKey, items]) => {
     items.forEach(({ order, idx }, itemPos) => {
       const status = computeOrderStatus(order);
-      const shippedQtyForOrder = (order.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
+      const shippedQtyForOrder = (order.shipments || []).filter(sh => sh.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
       const remainForOrder = (order.qty || 0) - shippedQtyForOrder;
       const totalVal = (order.qty || 0) * (order.unitPrice || 0);
 
@@ -9208,7 +9255,7 @@ async function exportOrderStatusExcel() {
 
       orders.forEach(o => {
         const status = computeOrderStatus(o);
-        const shippedQty = (o.shipments || []).reduce((s, sh) => s + (sh.qty || 0), 0);
+        const shippedQty = (o.shipments || []).filter(sh => sh.status === 'Shipped').reduce((s, sh) => s + (sh.qty || 0), 0);
         const remainQty = (o.qty || 0) - shippedQty;
         const row = [
           o.poNo, o.orderDate, o.itemCode, o.flex, o.nfSpec,
