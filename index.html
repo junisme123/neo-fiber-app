@@ -2,7 +2,7 @@
 <!-- saved from url=(0192)file:///C:/Users/Vincent%20Mo/AppData/Local/Temp/72a04113-44da-4d53-afe5-b7f565aa1a2a_Kimi_Agent_CI%E5%80%BC%E8%87%AA%E5%8A%A8%E5%90%8C%E6%AD%A5%20(1).zip.a2a/NeoFiber_InvoiceGenerator_v3.html -->
 <html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Neo-Fiber Invoice Generator</title>
 <style>
 :root {
@@ -34,13 +34,14 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color:
 .app-header .subtitle { font-size: 11px; opacity: 0.7; }
 
 /* Main tabs */
-.main-tabs { background: var(--primary-light); display: flex; padding: 0 24px; gap: 2px; }
+.main-tabs { background: var(--primary-light); display: flex; padding: 0 24px; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.main-tabs::-webkit-scrollbar { display: none; }
 .main-tab { padding: 10px 20px; cursor: pointer; border: none; background: transparent; color: rgba(255,255,255,0.7); font-size: 13px; font-weight: 500; border-bottom: 3px solid transparent; transition: all 0.2s; white-space: nowrap; }
 .main-tab:hover { color: white; background: rgba(255,255,255,0.1); }
 .main-tab.active { color: white; border-bottom-color: var(--accent); background: rgba(255,255,255,0.1); }
 
 /* Content area */
-.content { max-width: 1100px; margin: 0 auto; padding: 20px 16px; }
+.content { max-width: 1100px; margin: 0 auto; padding: 20px 16px; width: 100%; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 .po-dd-active { background: #e8f0fe !important; }
@@ -167,11 +168,236 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color:
 @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 
-/* Responsive */
+/* ============================================================
+   RESPONSIVE DESIGN — Mobile Portrait (≤ 640px / ≤ 480px)
+   ============================================================ */
+
+/* ── Tablet / small desktop ── */
+@media (max-width: 900px) {
+  .content { max-width: 100%; }
+}
+
+/* ── Mobile landscape + small tablet ── */
 @media (max-width: 640px) {
   .form-row.cols-3, .form-row.cols-4 { grid-template-columns: 1fr 1fr; }
   .customer-info-grid { grid-template-columns: 1fr; }
-  .content { padding: 12px 8px; }
+  .content { padding: 10px 8px; }
+  .main-tabs { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .main-tabs::-webkit-scrollbar { display: none; }
+  .main-tab { padding: 10px 14px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
+}
+
+/* ── Mobile portrait (primary target) ── */
+@media (max-width: 480px) {
+  /* Header */
+  .app-header { padding: 0 12px; height: 48px; }
+  .app-header h1 { font-size: 13px; }
+  .app-header .subtitle { display: none; }
+  .app-header .logo-icon { width: 28px; height: 28px; font-size: 11px; }
+  #msLoginArea { gap: 6px; }
+  #fbLoginBtn span, #msLoginBtn span { display: none; }
+  #fbLoginBtn, #msLoginBtn { padding: 6px 8px; font-size: 11px; gap: 0; }
+  #syncStatusBadge { display: none !important; }
+
+  /* Navigation tabs — horizontal scroll */
+  .main-tabs {
+    padding: 0 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 0;
+    flex-wrap: nowrap;
+  }
+  .main-tabs::-webkit-scrollbar { display: none; }
+  .main-tab {
+    padding: 10px 12px;
+    font-size: 11px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* Content area */
+  .content { padding: 8px 6px; }
+
+  /* Cards */
+  .card { border-radius: 8px; margin-bottom: 10px; }
+  .card-header { padding: 10px 14px; font-size: 12px; }
+  .card-body { padding: 12px 10px !important; }
+
+  /* Buttons — larger touch targets */
+  .btn { min-height: 40px; font-size: 12px; padding: 8px 12px; }
+  .btn-sm { min-height: 36px; font-size: 11px; padding: 6px 10px; }
+
+  /* Stat cards — 2 columns */
+  .stat-card { padding: 10px 8px; }
+  .stat-value { font-size: 20px; }
+
+  /* Cashflow summary — 2 columns */
+  #tab-cashflow > div:first-child {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  /* Order Status summary stats — 2 columns */
+  .os-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* Shipment Planner stats — 2 columns */
+  #tab-planner .card-body > div[style*="repeat(5"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  /* Planner controls — stack vertically */
+  #tab-planner .card-body > div[style*="display:flex"] {
+    flex-wrap: wrap;
+    gap: 8px !important;
+  }
+  #sp_filterText { width: 100% !important; }
+
+  /* Timeline wrapper — full width, horizontal scroll */
+  #sp_tableWrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -6px;
+    padding: 0 6px;
+  }
+
+  /* New PO form — single column */
+  #cf_newPoCard .card-body > div[style*="grid-template-columns:1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Order Status table — horizontal scroll */
+  #os_tableContainer, .os-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Invoice form — single column */
+  .form-row { grid-template-columns: 1fr !important; }
+  .form-row.cols-2 { grid-template-columns: 1fr !important; }
+
+  /* Modal — full screen on mobile */
+  .modal-overlay { align-items: flex-end; }
+  .modal-content {
+    max-width: 100% !important;
+    width: 100% !important;
+    border-radius: 16px 16px 0 0 !important;
+    max-height: 90vh !important;
+  }
+
+  /* Tables — horizontal scroll */
+  .table-responsive-wrap, [id$="_table"], [id$="Table"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* History table */
+  #historyTable { font-size: 11px; }
+
+  /* Input fields — larger touch targets */
+  input[type="text"], input[type="number"], input[type="date"],
+  input[type="email"], input[type="password"], input[type="month"],
+  select, textarea {
+    min-height: 40px;
+    font-size: 14px !important;
+  }
+
+  /* Customer info grid */
+  .customer-info-grid { grid-template-columns: 1fr !important; }
+
+  /* Line items table in New PO — horizontal scroll */
+  #cf_newPoCard [style*="grid-template-columns:140px"] {
+    display: none;
+  }
+  #cf_po_lines_container { overflow-x: auto; }
+}
+
+/* ── Very small phones (≤ 360px) ── */
+@media (max-width: 360px) {
+  .main-tab { padding: 10px 9px; font-size: 10px; }
+  .app-header h1 { font-size: 12px; }
+  .btn { font-size: 11px; padding: 7px 10px; }
+}
+
+/* ── Timeline Fullscreen Mode ── */
+.tl-fullscreen-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #0f172a;
+  z-index: 9990;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tl-fullscreen-header {
+  background: linear-gradient(135deg, #1e40af, #1e3a8a);
+  color: white;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.tl-fullscreen-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tl-fullscreen-body {
+  flex: 1;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px;
+  background: #0f172a;
+}
+.tl-fullscreen-body .tl-table {
+  font-size: 12px;
+}
+.tl-fullscreen-body .tl-cell {
+  min-width: 52px;
+}
+.tl-exit-btn {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s;
+}
+.tl-exit-btn:hover { background: rgba(255,255,255,0.25); }
+.tl-fullscreen-btn {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.25);
+  color: rgba(255,255,255,0.9);
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.2s;
+  margin-left: 8px;
+}
+.tl-fullscreen-btn:hover { background: rgba(255,255,255,0.22); }
+@media (max-width: 480px) {
+  .tl-fullscreen-body { padding: 4px; }
+  .tl-fullscreen-header { padding: 8px 12px; }
+  .tl-fullscreen-header h3 { font-size: 13px; }
 }
 
 /* Collapsible customer info */
@@ -11099,7 +11325,7 @@ function renderShipmentPlannerTimeline() {
 
   // ── CSS styles ──
   let h = '<style>';
-  h += '.tl-table{font-size:11px;border-collapse:separate;border-spacing:0;min-width:600px;width:max-content}';
+  h += '.tl-table{font-size:11px;border-collapse:separate;border-spacing:0;min-width:600px;width:max-content;table-layout:fixed}';
   h += '.tl-table th,.tl-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:0}';
   h += '.tl-table thead th{position:sticky;top:0;z-index:3}';
   h += '.tl-sticky{position:sticky;z-index:4;background:inherit}';
@@ -11138,6 +11364,7 @@ function renderShipmentPlannerTimeline() {
   h += '<th colspan="7" class="tl-sticky tl-sticky-l0 tl-head-month" style="text-align:left;padding:8px 12px;min-width:520px;border-right:2px solid rgba(255,255,255,0.2)">';
   h += '<span style="font-size:14px">\U0001f4c5</span> Shipment Timeline';
   h += '<span style="margin-left:12px;font-size:11px;font-weight:400;opacity:0.8">' + allPlans.length + ' plans \u00b7 ' + months.length + ' month' + (months.length>1?'s':'') + '</span>';
+  h += '<button class="tl-fullscreen-btn" onclick="tlOpenFullscreen()" title="Open fullscreen timeline">⛶ Fullscreen</button>';
   h += '</th>';
   months.forEach((m,mi) => {
     const mLabel = new Date(m.key+'-01').toLocaleDateString('en',{year:'numeric',month:'short'});
@@ -11262,6 +11489,76 @@ function renderShipmentPlannerTimeline() {
 
 // ── Escape helper for HTML attributes ──
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── Timeline: Fullscreen mode ──────────────────────────────
+function tlOpenFullscreen() {
+  // Get current timeline HTML
+  const wrapper = document.getElementById('sp_tableWrapper');
+  if (!wrapper) return;
+  const tableHTML = wrapper.innerHTML;
+
+  // Create fullscreen overlay
+  let overlay = document.getElementById('tl_fullscreen_overlay');
+  if (overlay) overlay.remove();
+
+  overlay = document.createElement('div');
+  overlay.id = 'tl_fullscreen_overlay';
+  overlay.className = 'tl-fullscreen-overlay';
+  overlay.innerHTML = `
+    <div class="tl-fullscreen-header">
+      <h3>
+        <span>📅</span>
+        Shipment Timeline
+        <span style="font-size:11px;font-weight:400;opacity:0.7;margin-left:4px">— Fullscreen View</span>
+      </h3>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:11px;opacity:0.6">Swipe or scroll to navigate</span>
+        <button class="tl-exit-btn" onclick="tlCloseFullscreen()">✕ Exit Fullscreen</button>
+      </div>
+    </div>
+    <div class="tl-fullscreen-body" id="tl_fullscreen_body">
+      ${tableHTML}
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+
+  // Try native fullscreen API
+  if (overlay.requestFullscreen) {
+    overlay.requestFullscreen().catch(() => {});
+  } else if (overlay.webkitRequestFullscreen) {
+    overlay.webkitRequestFullscreen();
+  }
+
+  // Listen for native fullscreen exit
+  const onFsChange = () => {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      tlCloseFullscreen();
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    }
+  };
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+
+  // ESC key to close
+  overlay._escHandler = (e) => { if (e.key === 'Escape') tlCloseFullscreen(); };
+  document.addEventListener('keydown', overlay._escHandler);
+}
+
+function tlCloseFullscreen() {
+  const overlay = document.getElementById('tl_fullscreen_overlay');
+  if (overlay) {
+    if (overlay._escHandler) document.removeEventListener('keydown', overlay._escHandler);
+    overlay.remove();
+  }
+  document.body.style.overflow = '';
+  // Exit native fullscreen if active
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }
+}
 
 // ── Timeline: Click date header to add plan for that date ──
 function tlAddPlanForDate(date) {
@@ -12129,7 +12426,7 @@ function parseExcelDate(val) {
       </div>
 
       <!-- Planner table -->
-      <div id="sp_tableWrapper" style="overflow-x:auto">
+      <div id="sp_tableWrapper" style="overflow-x:auto;-webkit-overflow-scrolling:touch;max-height:calc(100vh - 280px);overflow-y:auto">
         <div style="text-align:center;color:var(--text-muted);padding:40px">Loading...</div>
       </div>
     </div>
