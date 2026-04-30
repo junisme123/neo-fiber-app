@@ -3837,7 +3837,7 @@ async function downloadExcel() {
           while ((plMPre = plRowScanPre.exec(plXml)) !== null) {
             plExistingRowNums.add(parseInt(plMPre[1]));
           }
-          const plTemplateRowPat = new RegExp(`<row\b([^>]*?)\br="${plStartRow}"([^>]*)>([\s\S]*?)<\/row>`);
+          const plTemplateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${plStartRow}"([^>]*)>([\\s\\S]*?)<\\/row>`);
           const plTemplateRowMatch = plXml.match(plTemplateRowPat);
           if (plTemplateRowMatch) {
             const plTemplateRowFull = plTemplateRowMatch[0];
@@ -3847,11 +3847,14 @@ async function downloadExcel() {
               if (!plExistingRowNums.has(newRowNum)) {
                 // Clone template row with new row number
                 let newRow = plTemplateRowFull
-                  .replace(new RegExp('(\s)r="' + plStartRow + '"'), '$1r="' + newRowNum + '"')
+                  .replace(new RegExp('\\br="' + plStartRow + '"'), 'r="' + newRowNum + '"')
                   .replace(new RegExp('r="([A-Z]+)' + plStartRow + '"', 'g'), 'r="$1' + newRowNum + '"');
-                // Clear values in cloned row
-                newRow = newRow.replace(/<v>[^<]*<\/v>/g, '<v></v>');
-                newRow = newRow.replace(/<t>[^<]*<\/t>/g, '<t></t>');
+                // Clear values in cloned row (same as CI)
+                newRow = newRow.replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
+                  (m, attrs) => {
+                    const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
+                    return `<c${cleanAttrs}></c>`;
+                  });
                 plRowsToInsert.push(newRow);
               }
             }
@@ -3868,12 +3871,12 @@ async function downloadExcel() {
               plAllRowNums.sort((a, b) => b - a);
               for (const oldRow of plAllRowNums) {
                 const newRow = oldRow + plRowsAdded;
-                plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
+                plXml = plXml.replace(new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
                 plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
               }
               // Insert new rows before the (shifted) footer row
               const newFooterRow = plFooterRow + plRowsAdded;
-              const plInsertAnchor = new RegExp('(<row[^>]*\sr="' + newFooterRow + '"[^>]*>[\s\S]*?<\/row>)');
+              const plInsertAnchor = new RegExp('(<row[^>]*\\sr="' + newFooterRow + '"[^>]*>[\\s\\S]*?<\\/row>)');
               plXml = plXml.replace(plInsertAnchor, plRowsToInsert.join('') + '$1');
             }
           }
@@ -3885,7 +3888,7 @@ async function downloadExcel() {
           const plRowsToRemove = plTemplateDataRows - plNumRows;
           // Remove rows from plStartRow + plNumRows to plFooterRow - 1
           for (let r = plStartRow + plNumRows; r < plFooterRow; r++) {
-            const plRemovePat = new RegExp('<row[^>]*\sr="' + r + '"[^>]*>[\s\S]*?<\/row>');
+            const plRemovePat = new RegExp('<row[^>]*\\sr="' + r + '"[^>]*>[\\s\\S]*?<\\/row>');
             plXml = plXml.replace(plRemovePat, '');
           }
           // Shift footer rows up
@@ -3899,7 +3902,7 @@ async function downloadExcel() {
           plAllRowNums2.sort((a, b) => b - a);
           for (const oldRow of plAllRowNums2) {
             const newRow = oldRow - plRowsToRemove;
-            plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
+            plXml = plXml.replace(new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
             plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
           }
         }
@@ -3934,7 +3937,7 @@ async function downloadExcel() {
           plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plComputedTotalRow, String(plTotalQty), 'number');
           // Update SUM formula in total row
           plXml = plXml.replace(
-            new RegExp('SUM\(' + plCols.qty + '\d+:' + plCols.qty + '\d+\)', 'g'),
+            new RegExp('SUM\\(' + plCols.qty + '\\d+:' + plCols.qty + '\\d+\\)', 'g'),
             'SUM(' + plCols.qty + plStartRow + ':' + plCols.qty + (plStartRow + plNumRows - 1) + ')'
           );
         }
@@ -12913,6 +12916,7 @@ function syncAllOrdersToPlanner() {
 function doSyncAllPlansToOrders() {
   const count = syncAllPlansToOrders();
   toast('\u2705 Synced ' + count + ' plans to Order Status (all clients)', 'success');
+  if (typeof renderOrderStatus === 'function') setTimeout(renderOrderStatus, 200);
 }
 
 function syncAllPlansToOrders() {
@@ -12969,15 +12973,14 @@ function syncAllPlansToOrders() {
 
       // Update shipments
       if (!order.shipments) order.shipments = [];
-      const actualDates = (plan.actualShipments||[]).map(s => s.date);
-      let updated = order.shipments.filter(s => !actualDates.includes(s.shipDate));
+      // Keep invoice shipments; replace planner shipments
+      let updated = order.shipments.filter(s => s.source === 'invoice');
       (plan.actualShipments||[]).forEach(ps => {
-        updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', carrier: '', tracking: '' });
+        updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Shipped', source: 'planner', carrier: '', tracking: '' });
       });
-      const plannedDates = (plan.plannedShipments||[]).map(s => s.date);
-      updated = updated.filter(s => s.status !== 'Planned' || !plannedDates.includes(s.shipDate));
+      // (invoice shipments already preserved above, no need to filter planned by date)
       (plan.plannedShipments||[]).forEach(ps => {
-        if (ps.qty > 0) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', carrier: '', tracking: '' });
+        if (ps.qty > 0) updated.push({ shipDate: ps.date, qty: ps.qty, status: 'Planned', source: 'planner', carrier: '', tracking: '' });
       });
       order.shipments = updated;
 
