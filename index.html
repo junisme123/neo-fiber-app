@@ -3817,7 +3817,10 @@ async function downloadExcel() {
     });
 
     const safeInv = invoiceNo.replace(/[\/\\#\s]/g, '_');
-    const filename = `${cfg.code}_INVOICE_CI_${safeInv}.xlsm`;
+    const defaultName = `${cfg.code}_INVOICE_CI_${safeInv}`;
+    const userFileName = await promptFileName(defaultName, 'xlsm');
+    if (userFileName === null) return; // user cancelled
+    const filename = userFileName + '.xlsm';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -4542,13 +4545,15 @@ function resetPriceDB() {
   toast('Price database reset to defaults', 'info');
 }
 
-function exportPriceDB() {
+async function exportPriceDB() {
   const data = JSON.stringify(priceDB, null, 2);
   const blob = new Blob([data], {type: 'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'NeoFiber_PriceDB.json';
+  const _pfn3 = await promptFileName('NeoFiber_PriceDB', 'json');
+  if (_pfn3 === null) return;
+  a.download = _pfn3 + '.json';
   a.click();
   URL.revokeObjectURL(url);
   toast('Price DB exported', 'success');
@@ -5160,7 +5165,7 @@ function clearHistory() {
   toast('History cleared', 'info');
 }
 
-function exportHistory() {
+async function exportHistory() {
   const history = loadHistory();
   if (history.length === 0) { toast('No history to export', 'info'); return; }
   const headers = ['Date','Client','Type','Invoice No.','Invoice Date','Total Qty','Total Amount','Filename'];
@@ -5173,7 +5178,9 @@ function exportHistory() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'NeoFiber_InvoiceHistory.csv';
+  const _pfn4 = await promptFileName('NeoFiber_InvoiceHistory', 'csv');
+  if (_pfn4 === null) return;
+  a.download = _pfn4 + '.csv';
   a.click();
   URL.revokeObjectURL(url);
   toast('History exported', 'success');
@@ -5827,7 +5834,9 @@ async function exportCashflowForecast() {
     const a = document.createElement('a');
     a.href = url;
     const dateStr = new Date().toISOString().slice(0,10).replace(/-/g,'');
-    a.download = `NeoFiber_Cashflow_Forecast_${dateStr}.xlsx`;
+    const _pfn5 = await promptFileName(`NeoFiber_Cashflow_Forecast_${dateStr}`, 'xlsx');
+    if (_pfn5 === null) return;
+    a.download = _pfn5 + '.xlsx';
     a.click();
     URL.revokeObjectURL(url);
     toast('✓ Cashflow Forecast exported!', 'success');
@@ -7539,7 +7548,9 @@ async function exportCashflowExcel() {
     const a = document.createElement('a');
     a.href = url;
     const dateStr = new Date().toISOString().slice(0,10).replace(/-/g,'');
-    a.download = `NeoFiber_Cashflow_${dateStr}.xlsx`;
+    const _pfn6 = await promptFileName(`NeoFiber_Cashflow_${dateStr}`, 'xlsx');
+    if (_pfn6 === null) return;
+    a.download = _pfn6 + '.xlsx';
     a.click();
     URL.revokeObjectURL(url);
     toast('Cashflow exported to Excel', 'success');
@@ -9187,7 +9198,9 @@ async function exportOrderStatusExcel() {
     const a = document.createElement('a');
     a.href = url;
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    a.download = `NeoFiber_OrderStatus_${dateStr}.xlsx`;
+    const _pfn7 = await promptFileName(`NeoFiber_OrderStatus_${dateStr}`, 'xlsx');
+    if (_pfn7 === null) return;
+    a.download = _pfn7 + '.xlsx';
     a.click();
     URL.revokeObjectURL(url);
     toast('Order Status exported to Excel', 'success');
@@ -11116,7 +11129,7 @@ function removeSpPlanShipment(clientKey, planId, idx, type) {
 }
 
 // ── Export CSV ─────────────────────────────────────────────────
-function exportShipmentPlan() {
+async function exportShipmentPlan() {
   loadSpPlans();
   let csv = '﻿'; // BOM
   csv += 'Client,PO No.,Item Code,NF Spec,Total Qty,Unit Price,Status,Shipment Date,Order Date,Planned Shipments,Actual Shipments,Remaining Qty,Notes\n';
@@ -11139,8 +11152,65 @@ function exportShipmentPlan() {
 `;
     });
   });
-  downloadBlob(csv, 'text/cisv;charset=utf-8', 'shipment_plan.csv');
+  const _pfn8 = await promptFileName('NeoFiber_ShipmentPlan', 'csv');
+  if (_pfn8 === null) return;
+  downloadBlob(csv, 'text/csv;charset=utf-8', _pfn8 + '.csv');
   toast('✓ CSV exported', 'success');
+}
+
+// ── Shared: prompt user for custom filename before download ──
+// Returns a Promise<string|null>. null = user cancelled.
+function promptFileName(defaultName, ext) {
+  return new Promise((resolve) => {
+    // Remove existing modal if any
+    const existing = document.getElementById('_fnModal');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = '_fnModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px';
+
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+        <div style="font-size:15px;font-weight:700;color:#1a3a5c;margin-bottom:6px">💾 Save As</div>
+        <div style="font-size:12px;color:#6c7a8a;margin-bottom:14px">Enter a file name for the export (without extension)</div>
+        <div style="display:flex;align-items:center;border:1.5px solid #d0d9e3;border-radius:8px;overflow:hidden;background:#f8fafc">
+          <input id="_fnInput" type="text" value="${defaultName}"
+            style="flex:1;padding:10px 12px;border:none;background:transparent;font-size:14px;color:#2c3e50;outline:none"
+            placeholder="File name..." />
+          <span style="padding:10px 12px;font-size:12px;color:#6c7a8a;background:#f1f5f9;border-left:1px solid #d0d9e3;white-space:nowrap">.${ext}</span>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button id="_fnCancel" style="padding:8px 18px;border:1px solid #d0d9e3;border-radius:7px;background:#fff;color:#6c7a8a;font-size:13px;cursor:pointer;font-weight:500">Cancel</button>
+          <button id="_fnOk" style="padding:8px 20px;border:none;border-radius:7px;background:#1a3a5c;color:#fff;font-size:13px;cursor:pointer;font-weight:600">Download</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const input = document.getElementById('_fnInput');
+    const okBtn = document.getElementById('_fnOk');
+    const cancelBtn = document.getElementById('_fnCancel');
+
+    // Select all text for easy editing
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+
+    const confirm = () => {
+      const val = input.value.trim();
+      overlay.remove();
+      resolve(val || defaultName);
+    };
+    const cancel = () => { overlay.remove(); resolve(null); };
+
+    okBtn.addEventListener('click', confirm);
+    cancelBtn.addEventListener('click', cancel);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') confirm();
+      if (e.key === 'Escape') cancel();
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
+  });
 }
 
 function downloadBlob(content, mimeType, filename) {
