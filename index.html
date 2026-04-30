@@ -4795,19 +4795,80 @@ function resetCustInfo(key) {
 // ============================================================
 
 // ── Delete History Record ────────────────────────────────────────
+// ── Roll back Order Status when an Invoice is deleted ────────
+// Removes all shipment records whose invoiceNo matches the given invoice,
+// restores stockOnHand, and recalculates poStatus for each affected order.
+function rollbackOrderStatusForInvoice(invoiceRecord) {
+  if (!invoiceRecord) return 0;
+  const clientKey = invoiceRecord.clientKey || '';
+  const invoiceNo  = invoiceRecord.invoiceNo  || '';
+  const lines      = invoiceRecord.lines      || [];
+  if (!clientKey || !invoiceNo) return 0;
+
+  const allOrders = getClientOrders(clientKey);
+  if (!allOrders || allOrders.length === 0) return 0;
+
+  let rolledBack = 0;
+
+  allOrders.forEach(order => {
+    if (!order.shipments || order.shipments.length === 0) return;
+
+    // Find shipment(s) that belong to this invoice
+    const before = order.shipments.length;
+    const removed = order.shipments.filter(s =>
+      s.invoiceNo === invoiceNo || s.tracking === invoiceNo
+    );
+    order.shipments = order.shipments.filter(s =>
+      s.invoiceNo !== invoiceNo && s.tracking !== invoiceNo
+    );
+    const removedCount = before - order.shipments.length;
+    if (removedCount === 0) return;
+
+    rolledBack += removedCount;
+
+    // Restore stockOnHand: add back the qty that was subtracted
+    const restoredQty = removed.reduce((s, sh) => s + (sh.qty || 0), 0);
+    order.stockOnHand = (order.stockOnHand || 0) + restoredQty;
+
+    // Recalculate poStatus
+    const totalShipped = order.shipments.reduce((s, sh) => s + (sh.qty || 0), 0);
+    const totalQty     = order.qty || 0;
+    if (totalShipped <= 0) {
+      order.poStatus = 'pending';
+    } else if (totalShipped >= totalQty && totalQty > 0) {
+      order.poStatus = 'complete';
+    } else {
+      order.poStatus = 'partial';
+    }
+  });
+
+  if (rolledBack > 0) {
+    saveClientOrders(clientKey, allOrders);
+    // Re-render Order Status if currently on that tab
+    if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
+      renderOrderStatus();
+    }
+    console.log('[OS Rollback] Removed', rolledBack, 'shipment record(s) for invoice', invoiceNo);
+  }
+  return rolledBack;
+}
+
 function deleteHistory(idx) {
-  if (!confirm('Delete this invoice record? This cannot be undone.')) return;
+  if (!confirm('Delete this invoice record?\nThis will also remove the corresponding shipment records from Order Status.')) return;
   const history = loadHistory();
   if (idx < 0 || idx >= history.length) return;
   const removed = history.splice(idx, 1)[0];
   saveHistory(history);
+  // Roll back Order Status shipment records
+  const rolledBack = rollbackOrderStatusForInvoice(removed);
   // Also remove from cashflow
   const cfRecords = loadCashflowRecords();
   const cfIdx = cfRecords.findIndex(r =>
     r.invoiceNo === removed.invoiceNo && r.clientKey === removed.clientKey
   );
   if (cfIdx >= 0) { cfRecords.splice(cfIdx, 1); saveCashflowRecords(cfRecords); }
-  toast('✓ Invoice record deleted', 'success');
+  const rollbackMsg = rolledBack > 0 ? ` (${rolledBack} shipment record(s) reversed in Order Status)` : '';
+  toast('✓ Invoice record deleted' + rollbackMsg, 'success');
   renderHistory();
 }
 
@@ -4831,7 +4892,7 @@ function renderHistory() {
           <td>${h.totalQty}</td>
           <td>${h.totalAmount}</td>
           <td style="font-size:11px;color:var(--text-muted)">${escapeXml(h.filename)}</td>
-          <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="loadHistoryEntryToForm(${idx})">&#9998; Edit</button>&nbsp;<button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:#dc2626" onclick="if(confirm('Delete this invoice record?'))deleteHistory(${idx})">🗑</button></td>
+          <td><button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px" onclick="loadHistoryEntryToForm(${idx})">&#9998; Edit</button>&nbsp;<button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:11px;color:#dc2626" onclick="deleteHistory(${idx})">🗑</button></td>
         </tr>`).join('')}
       </tbody>
     </table>
