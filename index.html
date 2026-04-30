@@ -43,6 +43,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color:
 .content { max-width: 1100px; margin: 0 auto; padding: 20px 16px; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
+.po-dd-active { background: #e8f0fe !important; }
 
 /* Section card */
 .card { background: var(--card); border-radius: 10px; box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }
@@ -348,7 +349,7 @@ input[type=number] { -moz-appearance: textfield; }
   <button class="main-tab" onclick="switchTab(&#39;history&#39;)">📋 Invoice History</button>
   <button class="main-tab" onclick="switchTab(&#39;planner&#39;)">🚢 Shipment Planner</button>
   <button class="main-tab" onclick="switchTab(&#39;cashflow&#39;)">📊 Cashflow &amp; PO Import</button>
-  <button class="main-tab" onclick="switchTab(&#39;new-po&#39;)">✏️ New PO</button>
+
 </div>
 
 <div class="content">
@@ -664,64 +665,6 @@ input[type=number] { -moz-appearance: textfield; }
 
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer">
-    <div id="tab-new-po" class="tab-panel">
-      <div style="max-width:900px; margin:0 auto;">
-        <h3 style="margin-bottom:4px;color:var(--primary)">✏️ New PO (Manual Input)</h3>
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Fill in PO details manually, no PDF upload required.</div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
-            <input type="text" id="po_confirm_poNo" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Client</label>
-            <select id="po_confirm_client" onchange="updatePoPaymentDate(); updatePoItemCodeSuggestions()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-              <option value="">-- Select Client --</option>
-            </select>
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Shipment Date</label>
-            <input type="date" id="po_confirm_shipDate" value="" onchange="updatePoPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Payment Due Date <span style="font-size:10px;color:var(--text-muted)">(auto-calculated)</span></label>
-            <input type="date" id="po_confirm_payDate" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum)</span></label>
-            <input type="number" id="po_confirm_amount" value="0.00" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Notes</label>
-            <input type="text" id="po_confirm_notes" value="" placeholder="Optional notes" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
-          </div>
-        </div>
-
-        <!-- Line Items Table -->
-        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
-          <div style="background:#f0f4f8;padding:8px 12px;display:flex;align-items:center;justify-content:space-between">
-            <div style="font-size:12px;font-weight:600;color:var(--primary)">📝 Line Items</div>
-            <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poLinesAddRow()">+ Add Row</button>
-          </div>
-          <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Item Code</div>
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Description</div>
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Qty</div>
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Unit Price</div>
-            <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Amount</div>
-            <div></div>
-          </div>
-          <div id="po_lines_container" style="max-height:360px;overflow-y:auto"></div>
-        </div>
-
-        <div style="display:flex;gap:10px;justify-content:flex-end">
-          <button class="btn btn-outline" onclick="resetNewPOForm()">Reset</button>
-          <button class="btn btn-success" onclick="confirmPoImport()">✓ Confirm & Save to Forecast</button>
-        </div>
-      </div>
-    </div>
-    
   </div>
   <script>
 // ============================================================
@@ -1938,7 +1881,7 @@ let customClients = loadCustomClients();
 // ============================================================
 function switchTab(tab) {
   document.querySelectorAll('.main-tab').forEach((t,i) => {
-    const tabs = ['create','customers','orderstatus','history','planner','cashflow','new-po'];
+    const tabs = ['create','customers','orderstatus','history','planner','cashflow'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -1946,10 +1889,10 @@ function switchTab(tab) {
   if (tabEl) tabEl.classList.add('active');
   if (tab === 'customers') { renderCustomerInfo(); renderCustomClients(); }
   if (tab === 'history') renderHistory();
-  if (tab === 'cashflow') { renderCashflow(); initApiKeyInput(); }
+  if (tab === 'cashflow') { renderCashflow(); initApiKeyInput(); resetNewPOForm(); }
   if (tab === 'orderstatus') { initOrderStatusTabs(); renderOrderStatus(); }
   if (tab === 'planner') { initShipmentPlanner(); renderShipmentPlanner(); }
-  if (tab === 'new-po') { resetNewPOForm(); }
+
 }
 
 // ============================================================
@@ -6984,21 +6927,37 @@ function showPoConfirmDialog(parsed, filename) {
 
 // Simple flat line item helpers for PO confirm dialog
 function _renderPoLines() {
-  const container = document.getElementById('po_lines_container');
+  // Prefer modal container (when PDF import dialog is open), else use inline cashflow form
+  const modalOverlay = document.getElementById('modalOverlay');
+  const modalVisible = modalOverlay && modalOverlay.style.display !== 'none' && modalOverlay.style.display !== '';
+  let container;
+  if (modalVisible) {
+    // Modal is open - find container inside modal
+    container = modalOverlay.querySelector('#po_lines_container') || document.getElementById('po_lines_container');
+  } else {
+    // Use inline cashflow form container
+    container = document.getElementById('cf_po_lines_container') || document.getElementById('po_lines_container');
+  }
   if (!container) return;
   const lines = window._poLines || [];
   container.innerHTML = lines.map((row, i) => `
-    <div style="display:grid;grid-template-columns:120px 1fr 65px 90px 90px 30px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${i%2===0?'white':'#fafafa'}">
-      <input type="text" value="${escapeXml(row.itemCode||'')}" placeholder="Item code"
-        oninput="_poLinesChange(${i},'itemCode',this.value)"
-        style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
-      <input type="text" value="${escapeXml(row.description||'')}" placeholder="Description"
+    <div style="display:grid;grid-template-columns:140px 1fr 65px 100px 100px 30px;gap:4px;padding:5px 10px;border-bottom:1px solid #f0f0f0;align-items:center;background:${i%2===0?'white':'#fafafa'}">
+      <div style="position:relative">
+        <input type="text" id="po_line_item_${i}" value="${escapeXml(row.itemCode||'')}" placeholder="Item code"
+          oninput="_poLinesChange(${i},'itemCode',this.value);_poShowItemSuggestions(${i},this)"
+          onblur="_poItemCodeBlur(${i})"
+          onkeydown="_poItemKeydown(event,${i})"
+          autocomplete="off"
+          style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+        <div id="po_item_dd_${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #ccc;border-radius:0 0 4px 4px;max-height:140px;overflow-y:auto;z-index:9999;box-shadow:0 4px 8px rgba(0,0,0,0.12)"></div>
+      </div>
+      <input type="text" id="po_line_desc_${i}" value="${escapeXml(row.description||'')}" placeholder="Description"
         oninput="_poLinesChange(${i},'description',this.value)"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px">
       <input type="number" value="${row.qty||''}" placeholder="0"
         oninput="_poLinesChange(${i},'qty',this.value);_poLinesRecalc(${i})"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
-      <input type="number" value="${row.unitPrice||''}" placeholder="0.00" step="0.01"
+      <input type="number" id="po_line_price_${i}" value="${row.unitPrice||''}" placeholder="0.00" step="0.01"
         oninput="_poLinesChange(${i},'unitPrice',this.value);_poLinesRecalc(${i})"
         style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;text-align:right">
       <input type="number" id="po_line_amt_${i}" value="${row.amount||''}" placeholder="0.00" step="0.01"
@@ -7008,6 +6967,125 @@ function _renderPoLines() {
     </div>`).join('');
   _poLinesSyncTotal();
 }
+
+// ── Item Code autocomplete & price autofill for inline PO form ──────────────
+
+// Get all item codes for the currently selected client from Order Status
+function _poGetItemCodes() {
+  const clientKey = document.getElementById('po_confirm_client')?.value || '';
+  if (!clientKey) return [];
+  const orders = getClientOrders(clientKey);
+  const codes = new Set();
+  (orders || []).forEach(o => { if (o.itemCode) codes.add(o.itemCode); });
+  return Array.from(codes).sort();
+}
+
+// Show autocomplete dropdown for item code input
+function _poShowItemSuggestions(rowIndex, inputEl) {
+  const query = (inputEl.value || '').toLowerCase().trim();
+  const allCodes = _poGetItemCodes();
+  const filtered = query
+    ? allCodes.filter(c => c.toLowerCase().includes(query))
+    : allCodes;
+  const dd = document.getElementById('po_item_dd_' + rowIndex);
+  if (!dd) return;
+  if (filtered.length === 0) { dd.style.display = 'none'; return; }
+  dd.innerHTML = filtered.slice(0, 20).map(code =>
+    `<div style="padding:5px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0"
+      onmousedown="event.preventDefault();_poSelectItemCode(${rowIndex},'${code.replace(/'/g,"\'")}')">
+      ${code}
+    </div>`
+  ).join('');
+  dd.style.display = 'block';
+}
+
+// Select an item code from dropdown
+function _poSelectItemCode(rowIndex, code) {
+  const inputEl = document.getElementById('po_line_item_' + rowIndex);
+  if (inputEl) inputEl.value = code;
+  if (window._poLines && window._poLines[rowIndex]) {
+    window._poLines[rowIndex].itemCode = code;
+  }
+  const dd = document.getElementById('po_item_dd_' + rowIndex);
+  if (dd) dd.style.display = 'none';
+  // Trigger price lookup
+  _poFillPriceForRow(rowIndex, code);
+}
+
+// Handle keyboard navigation in dropdown
+function _poItemKeydown(event, rowIndex) {
+  const dd = document.getElementById('po_item_dd_' + rowIndex);
+  if (!dd || dd.style.display === 'none') return;
+  const items = dd.querySelectorAll('div');
+  let active = dd.querySelector('div.po-dd-active');
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    if (!active) { items[0]?.classList.add('po-dd-active'); }
+    else {
+      active.classList.remove('po-dd-active');
+      const next = active.nextElementSibling;
+      if (next) next.classList.add('po-dd-active');
+    }
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    if (active) {
+      active.classList.remove('po-dd-active');
+      const prev = active.previousElementSibling;
+      if (prev) prev.classList.add('po-dd-active');
+    }
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    if (active) {
+      event.preventDefault();
+      const code = active.textContent.trim();
+      _poSelectItemCode(rowIndex, code);
+    }
+  } else if (event.key === 'Escape') {
+    dd.style.display = 'none';
+  }
+}
+
+// On blur: hide dropdown and auto-fill price
+function _poItemCodeBlur(rowIndex) {
+  setTimeout(() => {
+    const dd = document.getElementById('po_item_dd_' + rowIndex);
+    if (dd) dd.style.display = 'none';
+  }, 200);
+  const inputEl = document.getElementById('po_line_item_' + rowIndex);
+  const code = (inputEl?.value || '').trim();
+  if (code) _poFillPriceForRow(rowIndex, code);
+}
+
+// Look up price and description from Order Status and fill into row
+function _poFillPriceForRow(rowIndex, itemCode) {
+  const clientKey = document.getElementById('po_confirm_client')?.value || '';
+  if (!clientKey || !itemCode) return;
+  const matches = lookupPriceFromOrderStatus(clientKey, itemCode);
+  if (!matches || matches.length === 0) return;
+  const found = matches[0]; // Use first match (highest price)
+  // Fill unit price
+  const priceEl = document.getElementById('po_line_price_' + rowIndex);
+  if (priceEl && (!priceEl.value || parseFloat(priceEl.value) === 0)) {
+    priceEl.value = found.price.toFixed(2);
+    _poLinesChange(rowIndex, 'unitPrice', found.price);
+    _poLinesRecalc(rowIndex);
+  }
+  // Fill description if empty
+  const descEl = document.getElementById('po_line_desc_' + rowIndex);
+  if (descEl && !descEl.value.trim() && found.nfItem) {
+    descEl.value = found.nfItem;
+    _poLinesChange(rowIndex, 'description', found.nfItem);
+  }
+  if (found.price > 0) {
+    toast('✓ Price auto-filled for "' + itemCode + '": USD ' + found.price.toFixed(2), 'success');
+  }
+}
+
+// Close all item dropdowns when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('[id^="po_item_dd_"]') && !e.target.matches('[id^="po_line_item_"]')) {
+    document.querySelectorAll('[id^="po_item_dd_"]').forEach(dd => dd.style.display = 'none');
+  }
+});
 
 function _poLinesChange(i, field, val) {
   if (!window._poLines || !window._poLines[i]) return;
@@ -7133,7 +7211,16 @@ function confirmPoImport() {
   window._poLines = null;
   window._poConfirmLines = null;
 
-  closeModal();
+  // If called from modal (PDF import), close modal; if inline form, reset it
+  if (document.getElementById('modalOverlay')?.style.display !== 'none' &&
+      document.getElementById('modalOverlay')?.style.display !== '') {
+    closeModal();
+  } else {
+    resetNewPOForm();
+    // Scroll to PO table to show result
+    const poTable = document.getElementById('cf_poTable');
+    if (poTable) poTable.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   document.getElementById('cf_clearPoBtn').style.display = '';
   renderPoTable(existing);
   renderCashflow();
@@ -11953,75 +12040,12 @@ function parseExcelDate(val) {
 
 
 
+    // updatePoItemCodeSuggestions: triggers re-render of suggestions when client changes
     function updatePoItemCodeSuggestions() {
-      const clientKey = document.getElementById('po_confirm_client')?.value || '';
-      if (!clientKey) { window._poItemCodeSuggestions = []; return; }
-      const itemCodes = new Set();
-      // Collect from spPlans
-      if (window.spPlans && spPlans[clientKey]) {
-        spPlans[clientKey].forEach(plan => { if (plan.itemCode) itemCodes.add(plan.itemCode); });
-      }
-      // Collect from orderStatus
-      if (window.orderStatus) {
-        orderStatus.forEach(order => { if (order.client === clientKey && order.itemCode) itemCodes.add(order.itemCode); });
-      }
-      // Collect from poForecast
-      if (window.poForecast) {
-        poForecast.forEach(po => { if (po.clientKey === clientKey && po.itemCode) itemCodes.add(po.itemCode); });
-      }
-      window._poItemCodeSuggestions = Array.from(itemCodes);
-      console.log('Item Code suggestions for', clientKey, ':', window._poItemCodeSuggestions);
+      // Suggestions are now fetched live via _poGetItemCodes() in _poShowItemSuggestions
+      // This function is kept for backward compatibility (called from select onchange)
+      window._poItemCodeSuggestions = _poGetItemCodes ? _poGetItemCodes() : [];
     }
-
-    function showItemCodeSuggestions(inputEl, rowIndex) {
-      const query = inputEl.value.toLowerCase();
-      const suggestions = window._poItemCodeSuggestions || [];
-      const filtered = query ? suggestions.filter(code => code.toLowerCase().includes(query)) : suggestions;
-      let dropdown = document.getElementById('item-code-suggestions');
-      if (!dropdown) {
-        dropdown = document.createElement('div');
-        dropdown.id = 'item-code-suggestions';
-        dropdown.style.cssText = 'position:absolute;background:white;border:1px solid #ddd;border-radius:4px;max-height:150px;overflow-y:auto;z-index:1000;display:none;';
-        document.body.appendChild(dropdown);
-      }
-      if (filtered.length === 0 || query.length < 1) { dropdown.style.display = 'none'; return; }
-      dropdown.innerHTML = filtered.map(code => `<div style="padding:4px 8px;cursor:pointer;font-size:12px;" onclick="selectItemCode(${rowIndex}, '${code}')">${code}</div>`).join('');
-      dropdown.style.display = 'block';
-      const rect = inputEl.getBoundingClientRect();
-      dropdown.style.left = rect.left + 'px';
-      dropdown.style.top = rect.bottom + 'px';
-      dropdown.style.width = rect.width + 'px';
-    }
-
-    function selectItemCode(rowIndex, code) {
-      const row = (window._poLines || [])[rowIndex];
-      if (row) { row.itemCode = code; _renderPoLines(); }
-      const dropdown = document.getElementById('item-code-suggestions');
-      if (dropdown) dropdown.style.display = 'none';
-    }
-
-    function resetNewPOForm() {
-  const clientSelect = document.getElementById('po_confirm_client');
-  if (clientSelect) clientSelect.innerHTML = buildClientOptions(''); // 加载客户选项
-  
-      document.getElementById('po_confirm_poNo').value = '';
-      document.getElementById('po_confirm_client').value = '';
-      document.getElementById('po_confirm_shipDate').value = new Date().toISOString().split('T')[0];
-      document.getElementById('po_confirm_payDate').value = '';
-      document.getElementById('po_confirm_amount').value = '0.00';
-      document.getElementById('po_confirm_notes').value = '';
-      window._poLines = [{ itemCode:'', description:'', qty:0, unitPrice:0, amount:0 }];
-      _renderPoLines();
-      window._poItemCodeSuggestions = [];
-    }
-
-    // Close suggestions on click outside
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('#item-code-suggestions') && !e.target.matches('[id^=po_line_item]')) {
-        const dropdown = document.getElementById('item-code-suggestions');
-        if (dropdown) dropdown.style.display = 'none';
-      }
-    });
     
 </script>
 
@@ -12172,9 +12196,7 @@ function parseExcelDate(val) {
           📄 Import PO (PDF)
           <input type="file" id="cf_poPdfUpload" accept=".pdf" style="display:none" onchange="handlePoPdfUpload(event)">
         </label>
-        <button class="btn btn-accent" style="cursor:pointer" onclick="showManualPoInput()">
-          ✏️ Manual Input PO
-        </button>
+
         <label class="btn btn-outline" style="cursor:pointer">
           📂 Upload PO Schedule (.xlsx)
           <input type="file" id="cf_poUpload" accept=".xlsx,.xls,.xlsm" style="display:none" onchange="handlePoUpload(event)">
@@ -12184,6 +12206,66 @@ function parseExcelDate(val) {
       </div>
       <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">📄 <strong>PDF Import</strong>: Upload any customer PO PDF → <strong>auto-extracts</strong> PO#, Shipment Date, Amount (no API key needed) → confirm &amp; adjust in popup → saved as forecast.<br>✏️ <strong>Manual Input</strong>: Manually enter PO details (PO#, Client, Ship Date, Items, Amount) → saved as forecast.<br>📂 <strong>Excel Upload</strong>: Batch upload shipment schedule. Expected columns: PO#, Client, Ship Date, Amount (USD)</p>
       <div id="cf_poTable" style="margin-top:16px"></div>
+    </div>
+  </div>
+
+  <!-- ===== NEW PO MANUAL INPUT (embedded in Cashflow tab) ===== -->
+  <div class="card" id="cf_newPoCard" style="margin-top:16px">
+    <div class="card-header">
+      ✏️ New PO — Manual Input
+      <span style="font-size:12px;font-weight:400;opacity:0.7;margin-left:8px">Manually enter PO details and save to forecast</span>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">PO Number</label>
+          <input type="text" id="po_confirm_poNo" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Client</label>
+          <select id="po_confirm_client" onchange="updatePoPaymentDate(); updatePoItemCodeSuggestions()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <option value="">-- Select Client --</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Shipment Date</label>
+          <input type="date" id="po_confirm_shipDate" value="" onchange="updatePoPaymentDate()" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Payment Due Date <span style="font-size:10px;color:var(--text-muted)">(auto-calculated)</span></label>
+          <input type="date" id="po_confirm_payDate" value="" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Total Amount (USD) <span style="font-size:10px;color:var(--text-muted)">(auto-sum)</span></label>
+          <input type="number" id="po_confirm_amount" value="0.00" step="0.01" min="0" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:4px">Notes</label>
+          <input type="text" id="po_confirm_notes" value="" placeholder="Optional notes" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+        </div>
+      </div>
+
+      <!-- Line Items Table -->
+      <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+        <div style="background:#f0f4f8;padding:8px 12px;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:12px;font-weight:600;color:var(--primary)">📝 Line Items</div>
+          <button class="btn btn-outline btn-sm" style="padding:3px 10px;font-size:11px" onclick="_poLinesAddRow()">+ Add Row</button>
+        </div>
+        <div style="display:grid;grid-template-columns:140px 1fr 65px 100px 100px 30px;gap:4px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #e2e8f0">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Item Code</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted)">Description</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Qty</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Unit Price</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-align:right">Amount</div>
+          <div></div>
+        </div>
+        <div id="cf_po_lines_container" style="max-height:400px;overflow-y:auto"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-outline" onclick="resetNewPOForm()">Reset</button>
+        <button class="btn btn-success" onclick="confirmPoImport()">✓ Confirm & Save to Forecast</button>
+      </div>
     </div>
   </div>
 </div>
