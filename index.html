@@ -3788,40 +3788,53 @@ async function downloadExcel() {
         // Strategy 3: Fall back to config footerRow
         let plFooterRow = plCfg.footerRow || 30;
         {
-          // Build sharedStrings index → text map from ssStrings
+          // Detect Total row: find row where QTY column (F) has SUM formula
+          // This handles PL templates where intermediate rows have running-total SUM formulas
+          // Strategy 1: Find row where qty column cell has SUM formula (most reliable)
+          // Strategy 2: Find LAST row with any SUM formula
+          // Strategy 3: Find row with TOTAL keyword in sharedStrings
+          const plQtyCol = (plCfg.cols && plCfg.cols.qty) || 'F';
           const totalKeywords = ['total', 'total :', 'total:', 'totals'];
-          // Check each row for TOTAL keyword in sharedStrings
-          const plRowMatches = [...plXml.matchAll(/<row[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)];
-          let plTotalFound = false;
+          const plRowMatches = [...plXml.matchAll(/<row[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)];
+          let plLastSumRow = -1;
+          let plQtySumRow = -1;
+          let plTotalKeywordRow = -1;
           for (const rm of plRowMatches) {
-            if (plTotalFound) break;
             const rowNum = parseInt(rm[1]);
-            if (rowNum <= plStartRow) continue; // skip header/data start rows
+            if (rowNum <= plStartRow) continue;
             const rowContent = rm[2];
-            // Check for SUM formula
-            if (/SUM\(/i.test(rowContent)) {
-              plFooterRow = rowNum;
-              plTotalFound = true;
-              break;
+            // Strategy 1: qty column cell has SUM formula
+            const qtyCellRegex = new RegExp('<c r="' + plQtyCol + rowNum + '"[^>]*>[\\s\\S]*?SUM\\(', 'i');
+            if (qtyCellRegex.test(rowContent)) {
+              plQtySumRow = rowNum;
             }
-            // Check for sharedString reference matching TOTAL
-            const ssRefs = [...rowContent.matchAll(/t="s"><v>(\d+)<\/v>/g)];
-            for (const sr of ssRefs) {
-              const ssIdx = parseInt(sr[1]);
-              const ssVal = (ssStrings[ssIdx] || '').toLowerCase().trim();
-              if (totalKeywords.some(k => ssVal === k || ssVal.startsWith('total'))) {
-                plFooterRow = rowNum;
-                plTotalFound = true;
-                break;
+            // Strategy 2: any SUM formula (track LAST occurrence)
+            if (/SUM\(/i.test(rowContent)) {
+              plLastSumRow = rowNum;
+            }
+            // Strategy 3: TOTAL keyword in sharedStrings (only first match)
+            if (plTotalKeywordRow < 0) {
+              const ssRefs = [...rowContent.matchAll(/t="s"><v>(\d+)<\/v>/g)];
+              for (const sr of ssRefs) {
+                const ssIdx = parseInt(sr[1]);
+                const ssVal = (ssStrings[ssIdx] || '').toLowerCase().trim();
+                if (totalKeywords.some(k => ssVal === k || ssVal.startsWith('total'))) {
+                  plTotalKeywordRow = rowNum;
+                  break;
+                }
+              }
+              if (plTotalKeywordRow < 0 && /<t[^>]*>[^<]*total[^<]*<\/t>/i.test(rowContent)) {
+                plTotalKeywordRow = rowNum;
               }
             }
-            if (plTotalFound) break;
-            // Check for inlineStr containing TOTAL
-            if (/<t[^>]*>[^<]*total[^<]*<\/t>/i.test(rowContent)) {
-              plFooterRow = rowNum;
-              plTotalFound = true;
-              break;
-            }
+          }
+          // Priority: qty-column SUM > last SUM row > TOTAL keyword
+          if (plQtySumRow > 0) {
+            plFooterRow = plQtySumRow;
+          } else if (plLastSumRow > 0) {
+            plFooterRow = plLastSumRow;
+          } else if (plTotalKeywordRow > 0) {
+            plFooterRow = plTotalKeywordRow;
           }
         }
         const plCols = plCfg.cols || { po:'A', itemCode:'B', qty:'F' };
@@ -3921,7 +3934,6 @@ async function downloadExcel() {
         plDataRows.forEach((r, i) => {
           const rowNum = plStartRow + i;
           // Fill line number in the first available column before PO# (if plCols.lineNo defined)
-          // or use a dedicated lineNo col from config
           if (plCols.lineNo) {
             plXml = setCellValue(plXml, ssStrings, plCols.lineNo + rowNum, String(i + 1), 'number');
           }
@@ -3929,17 +3941,60 @@ async function downloadExcel() {
           if (plCols.itemCode) plXml = setCellValue(plXml, ssStrings, plCols.itemCode + rowNum, r.itemCode || '', 'inlineStr');
           if (plCols.qty)      plXml = setCellValue(plXml, ssStrings, plCols.qty + rowNum, String(parseFloat(r.qty) || 0), 'number');
         });
+        // Update running-total SUM formulas in data rows (e.g. L30=SUM(L19:L29))
+        // These formulas reference a fixed range that needs to be updated after row changes
+        // Pattern: SUM(COL##:COL##) where the range ends at rowNum-1
+        for (let i = 0; i < plNumRows; i++) {
+          const rowNum = plStartRow + i;
+          const rowPat = new RegExp('(<row[^>]*\\sr="' + rowNum + '"[^>]*>[\\s\\S]*?<\/row>)');
+          const rowMatch = plXml.match(rowPat);
+          if (rowMatch) {
+            let updatedRow = rowMatch[1];
+            // Update SUM(COL##:COL##) formulas - range should end at previous row
+            updatedRow = updatedRow.replace(
+              /SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)/g,
+              (m, col1, start1, col2, end1) => {
+                if (col1 === col2) {
+                  // Keep start row at plStartRow, end at current row - 1
+                  const newEnd = rowNum - 1;
+                  if (newEnd >= plStartRow) {
+                    return 'SUM(' + col1 + plStartRow + ':' + col2 + newEnd + ')';
+                  }
+                }
+                return m;
+              }
+            );
+            if (updatedRow !== rowMatch[1]) {
+              plXml = plXml.replace(rowPat, updatedRow);
+            }
+          }
+        }
 
         // ── Step 5b-total: Fill total qty ──
-        if (plCfg.totalQtyCol) {
-          const plTotalQty = plDataRows.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0);
+        {
           const plComputedTotalRow = plFinalFooterRow;
-          plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plComputedTotalRow, String(plTotalQty), 'number');
-          // Update SUM formula in total row
-          plXml = plXml.replace(
-            new RegExp('SUM\\(' + plCols.qty + '\\d+:' + plCols.qty + '\\d+\\)', 'g'),
-            'SUM(' + plCols.qty + plStartRow + ':' + plCols.qty + (plStartRow + plNumRows - 1) + ')'
-          );
+          // Update ALL SUM formula ranges in the total row (qty, weight, CBM columns)
+          // Replace any SUM(X##:X##) pattern in the total row with updated range
+          const plTotalRowPat = new RegExp('(<row[^>]*\\sr="' + plComputedTotalRow + '"[^>]*>[\\s\\S]*?<\/row>)');
+          const plTotalRowMatch = plXml.match(plTotalRowPat);
+          if (plTotalRowMatch) {
+            let updatedTotalRow = plTotalRowMatch[1];
+            // Update all SUM(COL##:COL##) formulas to use correct range
+            updatedTotalRow = updatedTotalRow.replace(
+              /SUM\(([A-Z]+)\d+:([A-Z]+)\d+\)/g,
+              (m, col1, col2) => {
+                if (col1 === col2) {
+                  return 'SUM(' + col1 + plStartRow + ':' + col2 + (plStartRow + plNumRows - 1) + ')';
+                }
+                return m;
+              }
+            );
+            plXml = plXml.replace(plTotalRowPat, updatedTotalRow);
+          }
+          if (plCfg.totalQtyCol) {
+            const plTotalQty = plDataRows.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0);
+            plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plComputedTotalRow, String(plTotalQty), 'number');
+          }
         }
 
         zip.file(plSheetFile, plXml);
