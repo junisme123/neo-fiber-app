@@ -7840,6 +7840,174 @@ function switchOsView(mode) {
 }
 
 // ── Render main table ─────────────────────────────────────────
+// ── Sync Order Status from Invoice History ───────────────────
+// Re-scans ALL Invoice History records and rebuilds shipment data
+// for every order, ensuring data consistency.
+function syncOrderStatusFromInvoices() {
+  const history = loadHistory();
+  if (history.length === 0) {
+    toast('No Invoice History found. Nothing to sync.', 'info');
+    return;
+  }
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const allOrderData = loadOrderStatus(); // { clientKey: [orders] }
+  let totalUpdated = 0;
+  let totalInvoicesProcessed = 0;
+  const changeLog = []; // { invoiceNo, client, linesMatched, linesSkipped }
+
+  // ── Step 1: Clear all invoice-sourced shipments from every order ──
+  // (Keep manually-added shipments that don't have an invoiceNo field)
+  Object.keys(allOrderData).forEach(ck => {
+    (allOrderData[ck] || []).forEach(order => {
+      if (!order.shipments) return;
+      order.shipments = order.shipments.filter(s => !s.invoiceNo && !s._fromInvoice);
+    });
+  });
+
+  // ── Step 2: Re-apply all invoices ──
+  history.forEach(inv => {
+    const clientKey = (inv.clientKey || '').trim();
+    const invoiceNo = (inv.invoiceNo || '').trim();
+    const shipDateRaw = (inv.shipmentDate || inv.invoiceDate || '').replace(/\//g, '-');
+    const shipDateObj = shipDateRaw ? new Date(shipDateRaw) : null;
+    const shipStatus = (shipDateObj && shipDateObj <= today) ? 'Shipped' : 'Planned';
+
+    if (!clientKey || !invoiceNo) return;
+
+    // Get lines from invoice - try both 'lines' (cfLines format) and '_hLines' format
+    const lines = inv.lines || [];
+    if (lines.length === 0) return;
+
+    // Get orders for this client
+    if (!allOrderData[clientKey]) return;
+    const orders = allOrderData[clientKey];
+
+    let linesMatched = 0;
+    let linesSkipped = 0;
+
+    lines.forEach(line => {
+      // Support both cfLines format {po, itemCode, qty} and _hLines format {po, itemCode, qty}
+      const linePO = (line.po || '').trim() || (inv.linkedPO || '').trim() || (inv.headerPO || '').trim();
+      const lineQty = parseFloat(line.qty) || 0;
+      const lineItemCode = (line.itemCode || '').toLowerCase().trim();
+      const lineNfItem = (line.nfItem || line.nfSpec || '').toLowerCase().trim();
+
+      if (!linePO || lineQty <= 0) { linesSkipped++; return; }
+
+      // Find matching orders for this PO
+      const poOrders = orders.filter(o => String(o.poNo || '').trim() === String(linePO).trim());
+      if (poOrders.length === 0) { linesSkipped++; return; }
+
+      // Match by itemCode priority: PG itemCode → NF code → first in PO
+      const matchedOrder =
+        (lineItemCode ? poOrders.find(o => (o.itemCode || '').toLowerCase().trim() === lineItemCode) : null) ||
+        (lineNfItem   ? poOrders.find(o => (o.nfSpec   || '').toLowerCase().trim() === lineNfItem)   : null) ||
+        (lineNfItem   ? poOrders.find(o => (o.nfItem   || '').toLowerCase().trim() === lineNfItem)   : null) ||
+        poOrders[0];
+
+      if (!matchedOrder) { linesSkipped++; return; }
+
+      if (!matchedOrder.shipments) matchedOrder.shipments = [];
+      matchedOrder.shipments.push({
+        shipDate: shipDateRaw,
+        qty: lineQty,
+        invoiceNo: invoiceNo,
+        status: shipStatus,
+        carrier: '',
+        tracking: ''
+      });
+      linesMatched++;
+    });
+
+    if (linesMatched > 0) {
+      totalInvoicesProcessed++;
+      changeLog.push({ invoiceNo, client: inv.client || clientKey, linesMatched, linesSkipped });
+    }
+  });
+
+  // ── Step 3: Recalculate poStatus and stockOnHand for every order ──
+  Object.keys(allOrderData).forEach(ck => {
+    (allOrderData[ck] || []).forEach(order => {
+      const totalQty = order.qty || 0;
+      const shippedQty = (order.shipments || [])
+        .filter(s => s.status === 'Shipped')
+        .reduce((s, sh) => s + (sh.qty || 0), 0);
+      const plannedQty = (order.shipments || [])
+        .filter(s => s.status === 'Planned')
+        .reduce((s, sh) => s + (sh.qty || 0), 0);
+
+      // Recalculate poStatus
+      if (shippedQty >= totalQty && totalQty > 0) {
+        order.poStatus = 'complete';
+      } else if (shippedQty > 0) {
+        order.poStatus = 'partial';
+      } else if (order.poStatus === 'complete' || order.poStatus === 'partial') {
+        // Was previously marked as shipped but now no shipments found - reset
+        order.poStatus = 'pending';
+      }
+
+      // Recalculate stockOnHand: original qty minus shipped qty
+      // Only override if the order has shipments (otherwise keep manual value)
+      if ((order.shipments || []).some(s => s.invoiceNo)) {
+        order.stockOnHand = Math.max(0, totalQty - shippedQty);
+      }
+
+      totalUpdated++;
+    });
+  });
+
+  // ── Step 4: Auto-update Planned → Shipped for past dates ──
+  Object.keys(allOrderData).forEach(ck => {
+    (allOrderData[ck] || []).forEach(order => {
+      (order.shipments || []).forEach(sh => {
+        if (sh.status === 'Planned' && sh.shipDate) {
+          const d = new Date(sh.shipDate);
+          if (d <= today) sh.status = 'Shipped';
+        }
+      });
+    });
+  });
+
+  // ── Step 5: Save and refresh ──
+  saveOrderStatus(allOrderData);
+  initOrderStatusTabs();
+  renderOrderStatus();
+
+  // ── Step 6: Show summary ──
+  const summaryRows = changeLog.map(c =>
+    `<tr><td style="padding:4px 8px">${escapeXml(c.invoiceNo)}</td><td style="padding:4px 8px">${escapeXml(c.client)}</td><td style="padding:4px 8px;text-align:center;color:#2e7d32">${c.linesMatched}</td><td style="padding:4px 8px;text-align:center;color:${c.linesSkipped > 0 ? '#e65100' : '#999'}">${c.linesSkipped}</td></tr>`
+  ).join('');
+
+  const msg = changeLog.length === 0
+    ? '<p style="color:#666;text-align:center;padding:16px">No invoice lines could be matched to any orders.<br>Please check that PO numbers in Invoice History match those in Order Status.</p>'
+    : `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#f0f4ff">
+          <th style="padding:6px 8px;text-align:left">Invoice No.</th>
+          <th style="padding:6px 8px;text-align:left">Client</th>
+          <th style="padding:6px 8px;text-align:center">Lines Matched</th>
+          <th style="padding:6px 8px;text-align:center">Lines Skipped</th>
+        </tr></thead>
+        <tbody>${summaryRows}</tbody>
+      </table>`;
+
+  showModal(`
+    <div style="max-width:600px">
+      <h3 style="margin-bottom:4px;color:var(--primary)">🔄 Sync Complete</h3>
+      <p style="color:#666;font-size:13px;margin-bottom:12px">
+        Processed <strong>${totalInvoicesProcessed}</strong> invoice(s) across <strong>${totalUpdated}</strong> order(s).
+        All shipment data has been rebuilt from Invoice History.
+      </p>
+      <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+        ${msg}
+      </div>
+      <div style="margin-top:16px;text-align:right">
+        <button class="btn btn-primary" onclick="closeModal()">Done</button>
+      </div>
+    </div>
+  `);
+}
+
 function renderOrderStatus() {
   // Auto-update any Planned shipments whose date has now passed
   autoUpdateShipmentStatuses(osCurrentClient);
@@ -12830,6 +12998,7 @@ function parseExcelDate(val) {
           <input type="file" id="os_stockImport" accept=".xlsx,.xls" style="display:none" onchange="importStockData(event)">
         </label>
         <button class="btn btn-outline btn-sm" style="background:#fff3e0;border-color:#ff9800;color:#e65100" onclick="showUpdatePricesDialog()">💲 Update Prices</button>
+        <button class="btn btn-outline btn-sm" style="background:#e3f2fd;border-color:#1976d2;color:#0d47a1;font-weight:600" onclick="syncOrderStatusFromInvoices()" title="Re-scan all Invoice History and recalculate Shipped/Remaining/Stock for all orders">🔄 Sync from Invoices</button>
         <button class="btn btn-primary btn-sm" onclick="exportOrderStatusExcel()">⬇ Export Excel</button>
       </div>
     </div>
