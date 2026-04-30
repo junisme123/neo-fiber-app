@@ -11304,7 +11304,7 @@ function renderShipmentPlannerTimeline() {
   const wrapper = document.getElementById('sp_tableWrapper');
   if (!wrapper) return;
   if (!dates.length||!allPlans.length) {
-    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:60px 20px"><div style="font-size:56px;margin-bottom:16px">\U0001f4c5</div><p style="font-size:14px">No shipment timeline data.</p><p style="font-size:12px;color:var(--text-muted)">Import data or add plans to see the timeline view.</p></div>';
+    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:60px 20px"><div style="font-size:56px;margin-bottom:16px">📋</div><p style="font-size:14px">No shipment timeline data.</p><p style="font-size:12px;color:var(--text-muted)">Import data or add plans to see the timeline view.</p></div>';
     return;
   }
 
@@ -11362,7 +11362,7 @@ function renderShipmentPlannerTimeline() {
   h += '<tr>';
   // Fixed columns header spanning 7 cols
   h += '<th colspan="7" class="tl-sticky tl-sticky-l0 tl-head-month" style="text-align:left;padding:8px 12px;min-width:520px;border-right:2px solid rgba(255,255,255,0.2)">';
-  h += '<span style="font-size:14px">\U0001f4c5</span> Shipment Timeline';
+  h += ' Shipment Timeline';
   h += '<span style="margin-left:12px;font-size:11px;font-weight:400;opacity:0.8">' + allPlans.length + ' plans \u00b7 ' + months.length + ' month' + (months.length>1?'s':'') + '</span>';
   h += '<button class="tl-fullscreen-btn" onclick="tlOpenFullscreen()" title="Open fullscreen timeline">⛶ Fullscreen</button>';
   h += '</th>';
@@ -11507,7 +11507,6 @@ function tlOpenFullscreen() {
   overlay.innerHTML = `
     <div class="tl-fullscreen-header">
       <h3>
-        <span>📅</span>
         Shipment Timeline
         <span style="font-size:11px;font-weight:400;opacity:0.7;margin-left:4px">— Fullscreen View</span>
       </h3>
@@ -11575,7 +11574,7 @@ function tlAddPlanForDate(date) {
   let poOpts = pos.map(p => '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
 
   modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;width:440px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
-    '<h3 style="margin:0 0 16px;font-size:15px">\U0001f4c5 Add Shipment for ' + date + '</h3>' +
+    '<h3 style="margin:0 0 16px;font-size:15px">Add Shipment for ' + date + '</h3>' +
     '<div style="display:flex;flex-direction:column;gap:12px">' +
       '<div><label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">PO No.</label>' +
         (poOpts
@@ -11717,7 +11716,7 @@ function tlQuickAddCell(clientKey, planId, date) {
           '<input type="number" id="tlqa_qty" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font-size:13px" placeholder="0" min="0" autofocus value="' + (outstanding > 0 ? outstanding : '') + '"></div>' +
         '<div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Status</label>' +
           '<select id="tlqa_type" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font-size:13px">' +
-            '<option value="planned">\U0001f4c5 Planned</option>' +
+            '<option value="planned">Planned</option>' +
             '<option value="actual">\u2705 Shipped</option>' +
           '</select></div>' +
       '</div>' +
@@ -11804,7 +11803,7 @@ function tlEditCell(clientKey, planId, date, type) {
       '</div>' +
       '<div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Status</label>' +
         '<select id="tle_type" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;font-size:12px">' +
-          '<option value="planned"' + (type==='planned'?' selected':'') + '>\U0001f4c5 Planned</option>' +
+          '<option value="planned"' + (type==='planned'?' selected':'') + '>Planned</option>' +
           '<option value="actual"' + (type==='actual'?' selected':'') + '>\u2705 Shipped</option>' +
         '</select></div>' +
     '</div>' +
@@ -11883,7 +11882,7 @@ function tlAddDateColumn() {
   modal.id = 'tlAddDateModal';
   modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   modal.innerHTML = '<div style="background:white;border-radius:12px;padding:24px;width:340px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)">' +
-    '<h3 style="margin:0 0 16px;font-size:15px">\U0001f4c5 Add Date Column</h3>' +
+    '<h3 style="margin:0 0 16px;font-size:15px">Add Date Column</h3>' +
     '<div><label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">New Shipment Date</label>' +
       '<input type="date" id="tla_date" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box"></div>' +
     '<div style="font-size:11px;color:var(--text-muted);margin-top:10px">Adds a new date column. Click cells in that column to add shipment quantities.</div>' +
