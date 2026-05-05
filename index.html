@@ -13391,7 +13391,19 @@ function spimpUpdateCount() {
   
   const ws = _spImportWb.Sheets[selected[0].sheet];
   const data = XLSX.utils.sheet_to_json(ws, { defval: '', header: 1 });
-  const headerRow = data[3] || [];
+  // Auto-detect header row: find the first row that contains recognizable column keywords
+  // (handles files where header is on row 1, row 2, row 4, etc.)
+  const HEADER_KEYWORDS = ['po', 'job', 'item', 'qty', 'date', 'color', 'code', 'logo', 'variable', 'completed', 'outstanding', 'flex', 'description', 'ship'];
+  let headerRowIdx = 0;
+  for (let ri = 0; ri < Math.min(data.length, 10); ri++) {
+    const cells = (data[ri] || []).map(h => String(h || '').trim().toLowerCase());
+    const nonEmpty = cells.filter(Boolean);
+    if (nonEmpty.length >= 2) {
+      const matchCount = nonEmpty.filter(c => HEADER_KEYWORDS.some(kw => c.includes(kw))).length;
+      if (matchCount >= 1) { headerRowIdx = ri; break; }
+    }
+  }
+  const headerRow = data[headerRowIdx] || [];
   const headers = headerRow.map(h => String(h || '').trim()).filter(Boolean);
   
   const makeSelect = (id, label, defaultMatch, required=false) => {
@@ -13403,7 +13415,7 @@ function spimpUpdateCount() {
   showModal(`
     <div style="max-width:700px">
       <h3 style="margin-bottom:4px;color:var(--primary)">📥 Import Shipment Schedule</h3>
-      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Step 2 of 2 — Map columns from "${selected[0].sheet}". Detected ${headers.length} columns.</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Step 2 of 2 — Map columns from "${selected[0].sheet}". Detected ${headers.length} columns (header on row ${headerRowIdx + 1}).</p>
       <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:11px;color:var(--text-muted);max-height:80px;overflow-y:auto">
         <strong>Columns:</strong> ${headers.slice(0,20).map(h => '<span style="background:#e2e8f0;padding:1px 5px;border-radius:3px;margin:2px">' + h + '</span>').join(' ')}${headers.length > 20 ? ' ...' : ''}
       </div>
@@ -13453,7 +13465,18 @@ function confirmSpImport() {
     const ws = _spImportWb.Sheets[sheet];
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '', header: 1 });
     
-    const headerRow = rows[3] || [];
+    // Auto-detect header row (same logic as Step 2)
+    const IMPORT_HEADER_KEYWORDS = ['po', 'job', 'item', 'qty', 'date', 'color', 'code', 'logo', 'variable', 'completed', 'outstanding', 'flex', 'description', 'ship'];
+    let importHeaderRowIdx = 0;
+    for (let ri = 0; ri < Math.min(rows.length, 10); ri++) {
+      const cells = (rows[ri] || []).map(h => String(h || '').trim().toLowerCase());
+      const nonEmpty = cells.filter(Boolean);
+      if (nonEmpty.length >= 2) {
+        const matchCount = nonEmpty.filter(c => IMPORT_HEADER_KEYWORDS.some(kw => c.includes(kw))).length;
+        if (matchCount >= 1) { importHeaderRowIdx = ri; break; }
+      }
+    }
+    const headerRow = rows[importHeaderRowIdx] || [];
     const colIndices = {};
     Object.keys(colMap).forEach(f => {
       if (colMap[f]) {
@@ -13472,7 +13495,7 @@ function confirmSpImport() {
       }
     });
     
-    for (let i = 4; i < rows.length; i++) {
+    for (let i = importHeaderRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
       const poNo = String(row[colIndices.poNo] || '').trim();
       if (!poNo || poNo.toLowerCase() === 'total') continue;
