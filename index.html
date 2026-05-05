@@ -12291,9 +12291,13 @@ function renderShipmentPlannerTimeline() {
   h += '.tl-total-row{background:#f8fafc;font-weight:700}';
   h += '.tl-total-row td{border-top:2px solid #94a3b8}';
   h += '.tl-label-row{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:white}';
+  h += '.tl-drag-active{cursor:grabbing!important;user-select:none}';
+  h += '.tl-drag-active .tl-cell,.tl-drag-active .tl-head-date,.tl-drag-active .tl-head-plus{cursor:grabbing!important}';
+  h += '.tl-head-date{cursor:grab}';
+  h += '.tl-cell{cursor:pointer}';
   h += '</style>';
 
-  h += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">';
+  h += '<div id="tl-scroll-area" style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">';
   h += '<table class="tl-table"><thead>';
 
   // ── Row 1: Title + Month groups ──
@@ -12431,6 +12435,115 @@ function renderShipmentPlannerTimeline() {
   h += '</div>';
 
   wrapper.innerHTML = h;
+  // Initialize drag-to-scroll on the timeline scroll area
+  initTlDrag();
+}
+
+// ── Timeline: Horizontal drag-to-scroll ──────────────────────────────
+function initTlDrag() {
+  const wrapper = document.getElementById('sp_tableWrapper');
+  if (!wrapper) return;
+  // The actual scroll container is the inner div with id="tl-scroll-area"
+  const scrollEl = wrapper.querySelector('#tl-scroll-area') || wrapper;
+
+  let isDragging = false;
+  let startX = 0;
+  let scrollLeft = 0;
+  let dragMoved = false;
+  let dragTarget = null;
+
+  // Determine if the click target is a sticky info cell (should not drag)
+  function isStickyCell(el) {
+    if (!el) return false;
+    // Walk up to find td/th
+    let node = el;
+    while (node && node !== scrollEl) {
+      if (node.tagName === 'TD' || node.tagName === 'TH') {
+        // Check if it has tl-sticky class
+        if (node.classList && node.classList.contains('tl-sticky')) return true;
+        return false;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  scrollEl.addEventListener('mousedown', function(e) {
+    // Only drag on left mouse button
+    if (e.button !== 0) return;
+    // Don't drag if clicking on sticky info columns
+    if (isStickyCell(e.target)) return;
+    // Don't drag if clicking on buttons or inputs
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+    isDragging = true;
+    dragMoved = false;
+    dragTarget = e.target;
+    startX = e.pageX - scrollEl.offsetLeft;
+    scrollLeft = scrollEl.scrollLeft;
+    scrollEl.style.cursor = 'grabbing';
+    scrollEl.classList.add('tl-drag-active');
+    // Don't prevent default yet — only prevent if we actually move
+  });
+
+  scrollEl.addEventListener('mousemove', function(e) {
+    if (!isDragging) return;
+    e.preventDefault();
+    const x = e.pageX - scrollEl.offsetLeft;
+    const walk = (x - startX) * 1.2; // scroll speed multiplier
+    if (Math.abs(walk) > 3) dragMoved = true;
+    scrollEl.scrollLeft = scrollLeft - walk;
+  });
+
+  function stopDrag(e) {
+    if (!isDragging) return;
+    isDragging = false;
+    scrollEl.style.cursor = '';
+    scrollEl.classList.remove('tl-drag-active');
+    // If we moved, prevent the click event from firing on the cell
+    if (dragMoved && e && e.type === 'mouseup') {
+      // Add a one-time capture listener to block the click
+      scrollEl.addEventListener('click', function blockClick(ev) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        scrollEl.removeEventListener('click', blockClick, true);
+      }, true);
+    }
+    dragMoved = false;
+  }
+
+  scrollEl.addEventListener('mouseup', stopDrag);
+  scrollEl.addEventListener('mouseleave', function(e) {
+    if (isDragging) {
+      isDragging = false;
+      scrollEl.style.cursor = '';
+      scrollEl.classList.remove('tl-drag-active');
+      dragMoved = false;
+    }
+  });
+
+  // Touch support for mobile
+  let touchStartX = 0;
+  let touchScrollLeft = 0;
+  let touchTarget = null;
+
+  scrollEl.addEventListener('touchstart', function(e) {
+    if (isStickyCell(e.target)) return;
+    touchTarget = e.target;
+    touchStartX = e.touches[0].pageX;
+    touchScrollLeft = scrollEl.scrollLeft;
+  }, { passive: true });
+
+  scrollEl.addEventListener('touchmove', function(e) {
+    if (!touchTarget || isStickyCell(touchTarget)) return;
+    const x = e.touches[0].pageX;
+    const walk = touchStartX - x;
+    scrollEl.scrollLeft = touchScrollLeft + walk;
+  }, { passive: true });
+
+  scrollEl.addEventListener('touchend', function() {
+    touchTarget = null;
+  });
 }
 
 // ── Escape helper for HTML attributes ──
