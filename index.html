@@ -12266,6 +12266,10 @@ function renderShipmentPlannerTimeline() {
   h += '.tl-table{font-size:11px;border-collapse:separate;border-spacing:0;min-width:600px;width:max-content;table-layout:fixed}';
   h += '.tl-table th,.tl-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:0}';
   h += '.tl-table thead th{position:sticky;top:0;z-index:3}';
+  h += '.tl-row-month th{top:0;z-index:5}';
+  h += '.tl-row-date th{top:36px;z-index:4}';
+  h += '.tl-row-month .tl-sticky{z-index:7!important}';
+  h += '.tl-row-date .tl-sticky{z-index:6!important}';
   h += '.tl-sticky{position:sticky;z-index:4;background:inherit}';
   h += '.tl-sticky-l0{left:0}.tl-sticky-l1{left:100px}.tl-sticky-l2{left:160px}.tl-sticky-l3{left:220px}.tl-sticky-l4{left:300px}.tl-sticky-l5{left:375px}.tl-sticky-l6{left:450px}';
   h += '.tl-head-month{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:#93c5fd;padding:8px 6px;font-size:12px;font-weight:700;text-align:center;letter-spacing:0.5px}';
@@ -12297,11 +12301,11 @@ function renderShipmentPlannerTimeline() {
   h += '.tl-cell{cursor:pointer}';
   h += '</style>';
 
-  h += '<div id="tl-scroll-area" style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">';
+  h += '<div id="tl-scroll-area" style="overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid #e2e8f0;border-radius:8px;max-height:calc(100vh - 320px)">';
   h += '<table class="tl-table"><thead>';
 
   // ── Row 1: Title + Month groups ──
-  h += '<tr>';
+  h += '<tr class="tl-row-month">';
   // Fixed columns header spanning 7 cols
   h += '<th colspan="7" class="tl-sticky tl-sticky-l0 tl-head-month" style="text-align:left;padding:8px 12px;min-width:520px;border-right:2px solid rgba(255,255,255,0.2)">';
   h += ' Shipment Timeline';
@@ -12318,7 +12322,7 @@ function renderShipmentPlannerTimeline() {
   h += '</tr>';
 
   // ── Row 2: Column labels + Date headers ──
-  h += '<tr>';
+  h += '<tr class="tl-row-date">';
   const fixedCols = [
     {label:'PO#', w:'100px', cls:'tl-sticky-l0'},
     {label:'Job#', w:'60px', cls:'tl-sticky-l1'},
@@ -13617,7 +13621,7 @@ function parseExcelDate(val) {
       </div>
 
       <!-- Planner table -->
-      <div id="sp_tableWrapper" style="overflow-x:auto;-webkit-overflow-scrolling:touch;max-height:calc(100vh - 280px);overflow-y:auto">
+      <div id="sp_tableWrapper" style="position:relative">
         <div style="text-align:center;color:var(--text-muted);padding:40px">Loading...</div>
       </div>
     </div>
