@@ -11522,7 +11522,11 @@ function renderShipmentPlanner() {
   }, 120);
 }
 function renderShipmentPlannerImmediate() {
-  // Always use Timeline mode
+  if (typeof _spView !== 'undefined' && _spView === 'cashflow') {
+    renderCashFlowView();
+    return;
+  }
+  // Timeline mode
   renderShipmentPlannerTimeline();
   return;
   // Legacy list view code below (disabled)
@@ -12025,6 +12029,354 @@ async function exportShipmentPlan() {
   downloadBlob(csv, 'text/csv;charset=utf-8', _pfn8 + '.csv');
   toast('✓ CSV exported', 'success');
 }
+
+// ══════════════════════════════════════════════════════════════════
+// CASH FLOW FORECAST — Core helpers
+// ══════════════════════════════════════════════════════════════════
+
+/** Get paymentDays for a clientKey from customerInfo / CLIENT_CONFIGS */
+function spGetPayDays(clientKey) {
+  const info = (typeof customerInfo !== 'undefined' && customerInfo[clientKey])
+    || (typeof DEFAULT_CUSTOMER_INFO !== 'undefined' && DEFAULT_CUSTOMER_INFO[clientKey])
+    || {};
+  return parseInt(info.paymentDays) || 45;
+}
+
+/** Add N calendar days to a YYYY-MM-DD string, return YYYY-MM-DD */
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Build a flat list of cash-flow rows from all spPlans.
+ * Each row = one planned/actual shipment entry with:
+ *   { clientKey, clientLabel, poNo, itemCode, nfSpec, color, variable,
+ *     shipDate, qty, unitPrice, amount, payDays, receiptDate,
+ *     type: 'planned'|'actual', status: 'pending'|'received'|'overdue' }
+ */
+function buildCashFlowRows(filterClientKey) {
+  loadSpPlans();
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = [];
+
+  Object.keys(spPlans).forEach(ck => {
+    if (filterClientKey && filterClientKey !== ck) return;
+    const clientLabel = ck.startsWith('custom_')
+      ? (customClients.find(x => 'custom_' + x.code === ck) || {}).label || ck
+      : (CLIENT_CONFIGS[ck] || {}).label || ck;
+    const payDays = spGetPayDays(ck);
+
+    (spPlans[ck] || []).forEach(p => {
+      const unitPrice = parseFloat(p.unitPrice) || 0;
+
+      // Actual shipments (type = actual)
+      (p.actualShipments || []).forEach(s => {
+        if (!s.date || !s.qty) return;
+        const qty = parseFloat(s.qty) || 0;
+        const amount = qty * unitPrice;
+        const receiptDate = addDays(s.date, payDays);
+        const status = receiptDate <= today ? 'overdue' : 'pending';
+        rows.push({
+          clientKey: ck, clientLabel, poNo: p.poNo || '', itemCode: p.itemCode || '',
+          nfSpec: p.nfSpec || '', color: p.color || '', variable: p.variable || '',
+          shipDate: s.date, qty, unitPrice, amount, payDays, receiptDate,
+          type: 'actual', status,
+          invoiceNo: s.invoiceNo || ''
+        });
+      });
+
+      // Planned shipments (type = planned)
+      (p.plannedShipments || []).forEach(s => {
+        if (!s.date || !s.qty) return;
+        const qty = parseFloat(s.qty) || 0;
+        const amount = qty * unitPrice;
+        const receiptDate = addDays(s.date, payDays);
+        const status = 'pending';
+        rows.push({
+          clientKey: ck, clientLabel, poNo: p.poNo || '', itemCode: p.itemCode || '',
+          nfSpec: p.nfSpec || '', color: p.color || '', variable: p.variable || '',
+          shipDate: s.date, qty, unitPrice, amount, payDays, receiptDate,
+          type: 'planned', status,
+          invoiceNo: ''
+        });
+      });
+    });
+  });
+
+  // Sort by receiptDate ascending
+  rows.sort((a, b) => a.receiptDate.localeCompare(b.receiptDate));
+  return rows;
+}
+
+/**
+ * Export Cash Flow Forecast as Excel (2 sheets):
+ *   Sheet 1 – Detail: one row per shipment
+ *   Sheet 2 – Monthly Summary: grouped by receipt month
+ */
+async function exportCashFlowExcel() {
+  if (typeof XLSX === 'undefined') {
+    try {
+      await loadScript('https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js');
+    } catch(e) { toast('Failed to load Excel library', 'error'); return; }
+  }
+
+  const ck = (document.getElementById('sp_client') || {}).value || '';
+  const rows = buildCashFlowRows(ck);
+
+  if (!rows.length) {
+    toast('No shipment data with unit prices to export', 'error');
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  const today = new Date().toISOString().slice(0, 10);
+
+  // ── Sheet 1: Detail ──
+  const detailHeader = [
+    'Client', 'PO#', 'Item Code', 'NF Spec', 'Color', 'Variable',
+    'Ship Date', 'Type', 'Qty', 'Unit Price (USD)', 'Amount (USD)',
+    'Payment Term (Days)', 'Expected Receipt Date', 'Status', 'Invoice#'
+  ];
+  const detailData = [detailHeader, ...rows.map(r => [
+    r.clientLabel, r.poNo, r.itemCode, r.nfSpec, r.color, r.variable,
+    r.shipDate, r.type === 'actual' ? 'Shipped' : 'Planned',
+    r.qty, r.unitPrice, parseFloat(r.amount.toFixed(2)),
+    r.payDays, r.receiptDate,
+    r.type === 'actual' ? (r.receiptDate <= today ? 'Overdue' : 'Awaiting Receipt') : 'Planned',
+    r.invoiceNo
+  ])];
+  const wsDetail = XLSX.utils.aoa_to_sheet(detailData);
+  // Column widths
+  wsDetail['!cols'] = [14,12,14,12,10,10,12,10,8,16,14,18,20,14,12].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'Cash Flow Detail');
+
+  // ── Sheet 2: Monthly Summary ──
+  const monthMap = {};
+  rows.forEach(r => {
+    const m = r.receiptDate.slice(0, 7); // YYYY-MM
+    if (!monthMap[m]) monthMap[m] = { planned: 0, actual: 0, overdue: 0 };
+    if (r.type === 'actual') {
+      if (r.receiptDate <= today) monthMap[m].overdue += r.amount;
+      else monthMap[m].actual += r.amount;
+    } else {
+      monthMap[m].planned += r.amount;
+    }
+  });
+  const summaryHeader = ['Month', 'Planned Receipt (USD)', 'Shipped – Awaiting (USD)', 'Overdue (USD)', 'Total Expected (USD)'];
+  const summaryData = [summaryHeader];
+  Object.keys(monthMap).sort().forEach(m => {
+    const v = monthMap[m];
+    const total = v.planned + v.actual + v.overdue;
+    summaryData.push([
+      m,
+      parseFloat(v.planned.toFixed(2)),
+      parseFloat(v.actual.toFixed(2)),
+      parseFloat(v.overdue.toFixed(2)),
+      parseFloat(total.toFixed(2))
+    ]);
+  });
+  // Grand total row
+  const grandPlanned = Object.values(monthMap).reduce((s,v)=>s+v.planned,0);
+  const grandActual  = Object.values(monthMap).reduce((s,v)=>s+v.actual,0);
+  const grandOverdue = Object.values(monthMap).reduce((s,v)=>s+v.overdue,0);
+  summaryData.push(['TOTAL',
+    parseFloat(grandPlanned.toFixed(2)),
+    parseFloat(grandActual.toFixed(2)),
+    parseFloat(grandOverdue.toFixed(2)),
+    parseFloat((grandPlanned+grandActual+grandOverdue).toFixed(2))
+  ]);
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+  wsSummary['!cols'] = [12,22,24,18,20].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Monthly Summary');
+
+  // ── Download ──
+  const fname = await promptFileName('NeoFiber_CashFlow_' + today.replace(/-/g,''), 'xlsx');
+  if (fname === null) return;
+  XLSX.writeFile(wb, fname + '.xlsx');
+  toast('✓ Cash Flow exported: ' + rows.length + ' shipment rows', 'success');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CASH FLOW VIEW — render inside sp_tableWrapper
+// ══════════════════════════════════════════════════════════════════
+let _spView = 'timeline'; // 'timeline' | 'cashflow'
+
+function toggleCashFlowView() {
+  _spView = _spView === 'timeline' ? 'cashflow' : 'timeline';
+  const btn = document.getElementById('sp_cfViewBtn');
+  if (btn) {
+    btn.textContent = _spView === 'cashflow' ? '📅 Timeline View' : '💰 Cash Flow View';
+    btn.style.background = _spView === 'cashflow' ? 'var(--primary)' : '';
+    btn.style.color = _spView === 'cashflow' ? 'white' : '';
+  }
+  renderShipmentPlannerImmediate();
+}
+
+function renderCashFlowView() {
+  const wrapper = document.getElementById('sp_tableWrapper');
+  if (!wrapper) return;
+
+  const ck = (document.getElementById('sp_client') || {}).value || '';
+  const fromMonth = (document.getElementById('sp_fromMonth') || {}).value || '';
+  const toMonth   = (document.getElementById('sp_toMonth')   || {}).value || '';
+  const filterText = ((document.getElementById('sp_filterText') || {}).value || '').toLowerCase();
+
+  let rows = buildCashFlowRows(ck);
+
+  // Apply month filter
+  if (fromMonth) rows = rows.filter(r => r.receiptDate >= fromMonth + '-01');
+  if (toMonth)   rows = rows.filter(r => r.receiptDate <= toMonth   + '-31');
+
+  // Apply text filter
+  if (filterText) rows = rows.filter(r =>
+    r.poNo.toLowerCase().includes(filterText) ||
+    r.itemCode.toLowerCase().includes(filterText) ||
+    r.clientLabel.toLowerCase().includes(filterText)
+  );
+
+  if (!rows.length) {
+    wrapper.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:60px 20px">' +
+      '<div style="font-size:48px;margin-bottom:12px">💰</div>' +
+      '<p style="font-size:14px;font-weight:600;color:#1e40af">No cash flow data.</p>' +
+      '<p style="font-size:12px;margin-top:6px">Add Unit Price to plans in Shipment Planner, or check filters.</p>' +
+      '</div>';
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Group by receipt month for summary cards
+  const monthMap = {};
+  rows.forEach(r => {
+    const m = r.receiptDate.slice(0, 7);
+    if (!monthMap[m]) monthMap[m] = { planned: 0, actual: 0, overdue: 0, count: 0 };
+    monthMap[m].count++;
+    if (r.type === 'actual') {
+      if (r.receiptDate <= today) monthMap[m].overdue += r.amount;
+      else monthMap[m].actual += r.amount;
+    } else {
+      monthMap[m].planned += r.amount;
+    }
+  });
+
+  const grandTotal = rows.reduce((s, r) => s + r.amount, 0);
+  const grandOverdue = rows.filter(r => r.type === 'actual' && r.receiptDate <= today).reduce((s, r) => s + r.amount, 0);
+  const grandPending = grandTotal - grandOverdue;
+
+  const fmt = n => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  let h = '';
+
+  // Summary cards
+  h += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">';
+  h += `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px">
+    <div style="font-size:10px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Total Expected</div>
+    <div style="font-size:20px;font-weight:800;color:#1e40af;margin-top:4px">${fmt(grandTotal)}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:2px">${rows.length} shipments</div>
+  </div>`;
+  h += `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px">
+    <div style="font-size:10px;color:#166534;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Pending Receipt</div>
+    <div style="font-size:20px;font-weight:800;color:#166534;margin-top:4px">${fmt(grandPending)}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:2px">Planned + Shipped awaiting</div>
+  </div>`;
+  h += `<div style="background:${grandOverdue > 0 ? '#fef2f2' : '#f8fafc'};border:1px solid ${grandOverdue > 0 ? '#fecaca' : '#e2e8f0'};border-radius:8px;padding:12px 14px">
+    <div style="font-size:10px;color:${grandOverdue > 0 ? '#dc2626' : '#64748b'};font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Overdue</div>
+    <div style="font-size:20px;font-weight:800;color:${grandOverdue > 0 ? '#dc2626' : '#94a3b8'};margin-top:4px">${fmt(grandOverdue)}</div>
+    <div style="font-size:11px;color:#64748b;margin-top:2px">Shipped, receipt past due</div>
+  </div>`;
+  h += '</div>';
+
+  // Monthly breakdown
+  h += '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:14px">';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  h += '<thead><tr style="background:#1e3a8a;color:white">';
+  h += '<th style="padding:8px 12px;text-align:left">Month</th>';
+  h += '<th style="padding:8px 12px;text-align:right">Planned Receipt</th>';
+  h += '<th style="padding:8px 12px;text-align:right">Shipped – Awaiting</th>';
+  h += '<th style="padding:8px 12px;text-align:right;color:#fca5a5">Overdue</th>';
+  h += '<th style="padding:8px 12px;text-align:right">Month Total</th>';
+  h += '<th style="padding:8px 12px;text-align:center">Shipments</th>';
+  h += '</tr></thead><tbody>';
+
+  let rowIdx = 0;
+  Object.keys(monthMap).sort().forEach(m => {
+    const v = monthMap[m];
+    const total = v.planned + v.actual + v.overdue;
+    const bg = rowIdx++ % 2 === 0 ? 'white' : '#f8fafc';
+    const isCurrentMonth = m === today.slice(0, 7);
+    const borderLeft = isCurrentMonth ? 'border-left:3px solid #3b82f6;' : '';
+    h += `<tr style="background:${bg};${borderLeft}">`;
+    h += `<td style="padding:8px 12px;font-weight:${isCurrentMonth ? '700' : '500'};color:${isCurrentMonth ? '#1e40af' : '#1e293b'}">${m}${isCurrentMonth ? ' ◀ Now' : ''}</td>`;
+    h += `<td style="padding:8px 12px;text-align:right;color:#92400e">${v.planned > 0 ? fmt(v.planned) : '—'}</td>`;
+    h += `<td style="padding:8px 12px;text-align:right;color:#166534">${v.actual > 0 ? fmt(v.actual) : '—'}</td>`;
+    h += `<td style="padding:8px 12px;text-align:right;color:${v.overdue > 0 ? '#dc2626' : '#94a3b8'};font-weight:${v.overdue > 0 ? '700' : '400'}">${v.overdue > 0 ? fmt(v.overdue) : '—'}</td>`;
+    h += `<td style="padding:8px 12px;text-align:right;font-weight:700;color:#1e293b">${fmt(total)}</td>`;
+    h += `<td style="padding:8px 12px;text-align:center;color:#64748b">${v.count}</td>`;
+    h += '</tr>';
+  });
+
+  // Grand total row
+  h += `<tr style="background:#f1f5f9;border-top:2px solid #94a3b8;font-weight:700">`;
+  h += `<td style="padding:8px 12px">TOTAL</td>`;
+  const gPlanned = Object.values(monthMap).reduce((s,v)=>s+v.planned,0);
+  const gActual  = Object.values(monthMap).reduce((s,v)=>s+v.actual,0);
+  const gOverdue = Object.values(monthMap).reduce((s,v)=>s+v.overdue,0);
+  h += `<td style="padding:8px 12px;text-align:right;color:#92400e">${fmt(gPlanned)}</td>`;
+  h += `<td style="padding:8px 12px;text-align:right;color:#166534">${fmt(gActual)}</td>`;
+  h += `<td style="padding:8px 12px;text-align:right;color:${gOverdue>0?'#dc2626':'#94a3b8'}">${fmt(gOverdue)}</td>`;
+  h += `<td style="padding:8px 12px;text-align:right;color:#1e293b">${fmt(gPlanned+gActual+gOverdue)}</td>`;
+  h += `<td style="padding:8px 12px;text-align:center;color:#64748b">${rows.length}</td>`;
+  h += '</tr>';
+  h += '</tbody></table></div>';
+
+  // Detail table
+  h += '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px;max-height:420px;overflow-y:auto">';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">';
+  h += '<thead><tr style="background:#f1f5f9;position:sticky;top:0;z-index:2">';
+  ['Client','PO#','Item Code','Ship Date','Type','Qty','Unit Price','Amount','Net Days','Expected Receipt','Status'].forEach(col => {
+    h += `<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:600;color:#475569;border-bottom:2px solid #e2e8f0;white-space:nowrap">${col}</th>`;
+  });
+  h += '</tr></thead><tbody>';
+
+  rows.forEach((r, i) => {
+    const bg = i % 2 === 0 ? 'white' : '#f8fafc';
+    const isOverdue = r.type === 'actual' && r.receiptDate <= today;
+    const typeColor = r.type === 'actual' ? '#166534' : '#92400e';
+    const typeBg    = r.type === 'actual' ? '#dcfce7' : '#fef3c7';
+    const statusColor = isOverdue ? '#dc2626' : '#1e40af';
+    const statusBg    = isOverdue ? '#fef2f2' : '#eff6ff';
+    const statusText  = isOverdue ? '⚠ Overdue' : (r.type === 'actual' ? '⏳ Awaiting' : '📋 Planned');
+    h += `<tr style="background:${bg}">`;
+    h += `<td style="padding:6px 10px;font-weight:600;color:#1e40af">${esc(r.clientLabel)}</td>`;
+    h += `<td style="padding:6px 10px;font-weight:700">${esc(r.poNo)}</td>`;
+    h += `<td style="padding:6px 10px;color:#475569">${esc(r.itemCode)}</td>`;
+    h += `<td style="padding:6px 10px;white-space:nowrap">${r.shipDate}</td>`;
+    h += `<td style="padding:6px 10px"><span style="background:${typeBg};color:${typeColor};padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600">${r.type === 'actual' ? 'Shipped' : 'Planned'}</span></td>`;
+    h += `<td style="padding:6px 10px;text-align:right">${r.qty}</td>`;
+    h += `<td style="padding:6px 10px;text-align:right">${r.unitPrice > 0 ? '$' + r.unitPrice.toFixed(2) : '—'}</td>`;
+    h += `<td style="padding:6px 10px;text-align:right;font-weight:700">${r.amount > 0 ? fmt(r.amount) : '—'}</td>`;
+    h += `<td style="padding:6px 10px;text-align:center;color:#64748b">+${r.payDays}d</td>`;
+    h += `<td style="padding:6px 10px;white-space:nowrap;font-weight:600">${r.receiptDate}</td>`;
+    h += `<td style="padding:6px 10px"><span style="background:${statusBg};color:${statusColor};padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600">${statusText}</span></td>`;
+    h += '</tr>';
+  });
+
+  h += '</tbody></table></div>';
+
+  // Legend
+  h += '<div style="display:flex;gap:16px;margin-top:10px;font-size:11px;padding:8px 14px;background:#f8fafc;border-radius:8px;align-items:center;flex-wrap:wrap">';
+  h += '<span style="font-weight:600;color:#475569">Legend:</span>';
+  h += '<span style="display:flex;align-items:center;gap:4px"><span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600">Planned</span> Planned shipment, not yet shipped</span>';
+  h += '<span style="display:flex;align-items:center;gap:4px"><span style="background:#dcfce7;color:#166534;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600">Shipped</span> Actual shipment, awaiting receipt</span>';
+  h += '<span style="display:flex;align-items:center;gap:4px"><span style="background:#fef2f2;color:#dc2626;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600">⚠ Overdue</span> Past expected receipt date</span>';
+  h += '<span style="margin-left:auto;color:var(--text-muted);font-size:10px">Payment terms from Customer Info</span>';
+  h += '</div>';
+
+  wrapper.innerHTML = h;
+}
+
 
 // ── Shared: prompt user for custom filename before download ──
 // Returns a Promise<string|null>. null = user cancelled.
@@ -13671,6 +14023,8 @@ function parseExcelDate(val) {
           <button class="btn btn-outline btn-sm" onclick="doSyncAllPlansToOrders()">🔄 Sync to Orders</button>
           <button class="btn btn-primary btn-sm" onclick="showAddShipmentPlan()">+ Add Plan</button>
           <button class="btn btn-outline btn-sm" onclick="exportShipmentPlan()">⬇ Export CSV</button>
+          <button id="sp_cfViewBtn" class="btn btn-outline btn-sm" onclick="toggleCashFlowView()">💰 Cash Flow View</button>
+          <button class="btn btn-outline btn-sm" style="color:#166534" onclick="exportCashFlowExcel()">📊 Export Cash Flow</button>
         </div>
       </div>
 
