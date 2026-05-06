@@ -2440,6 +2440,8 @@ function buildForm() {
   if (!cfg) return;
   const docCfg = cfg[state.docType];
   if (!docCfg) { toast('No ' + state.docType.toUpperCase() + ' template for this client', 'error'); return; }
+  // [ExportFormat] Apply custom cols override to docCfg for display
+  if (docCfg.cols) docCfg.cols = getEffectiveCols(clientKey, state.docType, docCfg.cols);
 
   // Header fields
   const headerDiv = document.getElementById('headerFields');
@@ -3481,7 +3483,7 @@ async function downloadExcel() {
     // ── Data rows: fill data + remove surplus pre-allocated rows ──
     const startRow = docCfg.dataStartRow;
     const footerRow = docCfg.footerRow || (startRow + 50);
-    const cols = { ...docCfg.cols }; // Use a copy to avoid mutating docCfg.cols across calls
+    const cols = { ...getEffectiveCols(clientKey, state.docType, docCfg.cols) }; // [ExportFormat] Apply custom col overrides
     const numDataRows = rows.length;
     const isCustomClient = clientKey.startsWith('custom_');
 
@@ -3771,7 +3773,7 @@ async function downloadExcel() {
       // ===== FILL CI DATA ROWS =====
       const ciStartRow = ciCfg.dataStartRow;
       const ciFooterRow = ciCfg.footerRow || (ciStartRow + 50);
-      const ciCols = { ...ciCfg.cols }; // Use a copy to avoid mutating ciCfg.cols across calls
+      const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) }; // [ExportFormat] Apply custom col overrides
       const ciIndexMode = ciCfg.indexFormulaMode === true;
 
       if (!ciIndexMode) {
@@ -5088,6 +5090,7 @@ function renderCustInfoForm() {
       <div class="info-field"><label>Payment Terms</label><input type="text" id="ci_payment" value="${escapeXml(info.payment||'')}"></div>
       ${extraFields}
     </div>
+    ${renderExportFormatEditor(key)}
     <div class="info-save-bar">
       <button class="btn btn-outline" onclick="resetCustInfo('${key}')">↺ Reset to Default</button>
       <button class="btn btn-success" onclick="saveCustInfo('${key}')">💾 Save Changes</button>
@@ -5152,6 +5155,211 @@ function resetCustInfo(key) {
   saveCustomerInfo(customerInfo);
   renderCustInfoForm();
   toast('Reset to default', 'info');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// EXPORT FORMAT EDITOR — Column mapping editor for Invoice/CI/PL
+// ══════════════════════════════════════════════════════════════════
+
+// Storage key: nf_export_cols_{clientKey}
+function _efStorageKey(clientKey) {
+  return 'nf_export_cols_' + clientKey;
+}
+
+/** Load custom cols override for a client. Returns null if not customized. */
+function loadExportCols(clientKey) {
+  try {
+    const raw = localStorage.getItem(_efStorageKey(clientKey));
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+/** Save custom cols override for a client. */
+function saveExportCols(clientKey, colsOverride) {
+  localStorage.setItem(_efStorageKey(clientKey), JSON.stringify(colsOverride));
+}
+
+/** Remove custom cols override (reset to default). */
+function resetExportCols(clientKey) {
+  localStorage.removeItem(_efStorageKey(clientKey));
+}
+
+/**
+ * Get effective cols for a docType, merging custom overrides.
+ * Always call this instead of docCfg.cols directly in export paths.
+ */
+function getEffectiveCols(clientKey, docType, baseCols) {
+  const saved = loadExportCols(clientKey);
+  if (saved && saved[docType]) {
+    // Merge: keep base field order, override column letters
+    const merged = {};
+    for (const field of Object.keys(baseCols)) {
+      merged[field] = saved[docType][field] || baseCols[field];
+    }
+    return merged;
+  }
+  return baseCols;
+}
+
+// Field display names and descriptions
+const EF_FIELD_INFO = {
+  po:          { label: 'PO No.',          desc: 'Purchase Order number', icon: '📋' },
+  itemCode:    { label: 'Item Code',        desc: 'Customer item/product code', icon: '🏷' },
+  flex:        { label: 'Flex',             desc: 'Flex/variable specification', icon: '🔧' },
+  nfItem:      { label: 'NF Item No.',      desc: 'Neo-Fiber internal item number', icon: '🔢' },
+  description: { label: 'Description',      desc: 'Product description / NF Item name', icon: '📝' },
+  qty:         { label: 'Qty (pcs)',         desc: 'Quantity in pieces', icon: '📦' },
+  unitPrice:   { label: 'Unit Price (USD)', desc: 'Price per unit in USD', icon: '💲' },
+  amount:      { label: 'Amount (USD)',      desc: 'Total amount = Qty × Unit Price', icon: '💰' },
+  line:        { label: 'Line #',            desc: 'Row/line number (auto)', icon: '#' },
+};
+
+const COL_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P'];
+
+/** Render the Export Format editor section inside Customer Info */
+function renderExportFormatEditor(clientKey) {
+  const cfg = getClientConfig(clientKey);
+  if (!cfg) return '';
+
+  const saved = loadExportCols(clientKey) || {};
+  const docTypes = ['invoice'];
+  if (cfg.hasCI) docTypes.push('ci');
+  if (cfg.hasPL) docTypes.push('pl');
+
+  const docLabels = { invoice: '📄 Invoice', ci: '📦 Commercial Invoice (CI)', pl: '📋 Packing List (PL)' };
+
+  let html = `
+  <div style="margin-top:20px;border-top:2px solid #e2e8f0;padding-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div>
+        <div style="font-weight:700;color:#1e3a5c;font-size:14px">📊 Export Format — Column Mapping</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px">Customize which Excel column (A, B, C…) each field maps to when exporting Invoice / CI / PL</div>
+      </div>
+      <button onclick="resetAllExportCols('${clientKey}')" style="padding:5px 12px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">↺ Reset All to Default</button>
+    </div>`;
+
+  docTypes.forEach(dt => {
+    const baseCols = cfg[dt] && cfg[dt].cols ? cfg[dt].cols : null;
+    if (!baseCols) return;
+
+    const customCols = saved[dt] || {};
+    const fields = Object.keys(baseCols).filter(f => f !== 'line');
+
+    html += `
+    <div style="margin-bottom:14px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+      <div style="background:#f1f5f9;padding:8px 14px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-weight:700;font-size:12px;color:#1e3a5c">${docLabels[dt] || dt.toUpperCase()}</span>
+        <span style="font-size:10px;color:#64748b">${fields.length} fields</span>
+      </div>
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:#f8fafc">
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;width:32px">#</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Field</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Description</th>
+            <th style="padding:7px 12px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;width:110px">Default Col</th>
+            <th style="padding:7px 12px;text-align:center;font-weight:600;color:#1e40af;border-bottom:1px solid #e2e8f0;width:110px;background:#eff6ff">Custom Col</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+    fields.forEach((field, idx) => {
+      const defaultCol = baseCols[field] || '—';
+      const customCol  = customCols[field] || '';
+      const info = EF_FIELD_INFO[field] || { label: field, desc: '', icon: '·' };
+      const isCustomized = customCol && customCol !== defaultCol;
+      const rowBg = idx % 2 === 0 ? 'white' : '#f8fafc';
+
+      html += `
+          <tr style="background:${rowBg}">
+            <td style="padding:6px 12px;color:#94a3b8;font-size:11px">${idx + 1}</td>
+            <td style="padding:6px 12px">
+              <span style="font-size:13px;margin-right:5px">${info.icon}</span>
+              <span style="font-weight:600;color:#1e293b">${info.label}</span>
+            </td>
+            <td style="padding:6px 12px;color:#64748b;font-size:11px">${info.desc}</td>
+            <td style="padding:6px 12px;text-align:center">
+              <span style="background:#f1f5f9;color:#475569;padding:3px 10px;border-radius:5px;font-weight:700;font-family:monospace;font-size:13px">${defaultCol}</span>
+            </td>
+            <td style="padding:6px 12px;text-align:center;background:#eff6ff">
+              <select id="ef_${clientKey}_${dt}_${field}"
+                onchange="onExportColChange('${clientKey}','${dt}','${field}',this.value)"
+                style="padding:3px 6px;border:1.5px solid ${isCustomized ? '#3b82f6' : '#cbd5e1'};border-radius:5px;font-size:12px;font-weight:700;font-family:monospace;background:${isCustomized ? '#eff6ff' : 'white'};color:${isCustomized ? '#1e40af' : '#475569'};cursor:pointer;width:70px">
+                <option value="">— same —</option>
+                ${COL_LETTERS.map(l => `<option value="${l}" ${(customCol === l) ? 'selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </td>
+          </tr>`;
+    });
+
+    html += `
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+  });
+
+  html += `
+    <div style="font-size:10px;color:#94a3b8;margin-top:6px;padding:6px 10px;background:#f8fafc;border-radius:6px">
+      💡 <strong>Tip:</strong> "— same —" means use the default column. Changes take effect immediately on next export. 
+      <span style="color:#dc2626">⚠ Ensure no two fields share the same column letter.</span>
+    </div>
+  </div>`;
+
+  return html;
+}
+
+/** Called when user changes a column select */
+function onExportColChange(clientKey, docType, field, value) {
+  const saved = loadExportCols(clientKey) || {};
+  if (!saved[docType]) saved[docType] = {};
+
+  if (!value) {
+    delete saved[docType][field]; // revert to default
+  } else {
+    saved[docType][field] = value;
+  }
+
+  // Clean up empty docType objects
+  if (Object.keys(saved[docType]).length === 0) delete saved[docType];
+  if (Object.keys(saved).length === 0) {
+    resetExportCols(clientKey);
+  } else {
+    saveExportCols(clientKey, saved);
+  }
+
+  // Update visual feedback on the select
+  const sel = document.getElementById(`ef_${clientKey}_${docType}_${field}`);
+  if (sel) {
+    const isCustomized = !!value;
+    sel.style.borderColor = isCustomized ? '#3b82f6' : '#cbd5e1';
+    sel.style.background  = isCustomized ? '#eff6ff' : 'white';
+    sel.style.color       = isCustomized ? '#1e40af' : '#475569';
+  }
+
+  // Check for duplicate column assignments and warn
+  const saved2 = loadExportCols(clientKey) || {};
+  const cfg = getClientConfig(clientKey);
+  if (cfg && cfg[docType] && cfg[docType].cols) {
+    const effective = getEffectiveCols(clientKey, docType, cfg[docType].cols);
+    const vals = Object.values(effective).filter(v => v && v !== '—');
+    const dupes = vals.filter((v, i) => vals.indexOf(v) !== i);
+    if (dupes.length > 0) {
+      toast('⚠ Duplicate column: ' + [...new Set(dupes)].join(', ') + ' — please fix before exporting', 'error');
+    } else {
+      toast('✓ Column mapping updated', 'success');
+    }
+  }
+}
+
+/** Reset all export cols for a client */
+function resetAllExportCols(clientKey) {
+  if (!confirm('Reset all column mappings to default for this client?')) return;
+  resetExportCols(clientKey);
+  // Re-render the customer info form to reflect reset
+  renderCustInfoForm();
+  toast('↺ Column mappings reset to default', 'info');
 }
 
 // ============================================================
