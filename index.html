@@ -400,6 +400,42 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg); color:
   .tl-fullscreen-header h3 { font-size: 13px; }
 }
 
+/* ── Timeline Table Styles (static, moved out of innerHTML for perf) ── */
+.tl-table{font-size:11px;border-collapse:separate;border-spacing:0;min-width:600px;width:max-content;table-layout:fixed}
+.tl-table th,.tl-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:0}
+.tl-table thead th{position:sticky;top:0;z-index:3}
+.tl-row-month th{top:0;z-index:5}
+.tl-row-date th{top:36px;z-index:4}
+.tl-row-month .tl-sticky{z-index:7!important}
+.tl-row-date .tl-sticky{z-index:6!important}
+.tl-sticky{position:sticky;z-index:4;background:inherit}
+.tl-sticky-l0{left:0}.tl-sticky-l1{left:100px}.tl-sticky-l2{left:160px}.tl-sticky-l3{left:220px}.tl-sticky-l4{left:300px}.tl-sticky-l5{left:375px}.tl-sticky-l6{left:450px}
+.tl-head-month{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:#93c5fd;padding:8px 6px;font-size:12px;font-weight:700;text-align:center;letter-spacing:0.5px}
+.tl-head-date{background:#f8fafc;padding:6px 3px;text-align:center;font-size:10px;font-weight:600;color:#475569;cursor:grab;transition:all 0.15s;border-bottom:2px solid transparent}
+.tl-head-date:hover{background:#dbeafe;border-bottom-color:#3b82f6}
+.tl-head-date.tl-today{background:#3b82f6;color:white;border-radius:0}
+.tl-head-date.tl-weekend{background:#fef2f2;color:#991b1b}
+.tl-head-date.tl-today.tl-weekend{background:#3b82f6;color:white}
+.tl-head-plus{background:#f1f5f9;padding:4px;text-align:center;cursor:pointer;color:#3b82f6;font-size:16px;font-weight:400;transition:background 0.15s}
+.tl-head-plus:hover{background:#dbeafe}
+.tl-cell{text-align:center;padding:5px 4px;font-size:11px;cursor:pointer;transition:all 0.15s;min-width:46px;border-radius:4px}
+.tl-cell:hover{outline:2px solid #3b82f6;outline-offset:-2px;z-index:2;position:relative;box-shadow:0 0 0 1px rgba(59,130,246,0.3)}
+.tl-cell-planned{background:#fef3c7;color:#92400e;font-weight:700;border-radius:4px}
+.tl-cell-actual{background:#dcfce7;color:#166534;font-weight:700;border-radius:4px}
+.tl-cell-empty{color:#94a3b8;cursor:pointer;font-size:13px}
+.tl-cell-empty:hover{background:#dbeafe;color:#2563eb;font-size:14px;font-weight:700;outline:2px solid #3b82f6;outline-offset:-2px}
+.tl-info{font-size:10px;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px;background:inherit}
+.tl-info-po{font-weight:700;color:#1e40af;min-width:100px;max-width:100px;left:0}
+.tl-info-sm{font-size:10px;color:#64748b;min-width:60px;max-width:60px}
+.tl-stat{text-align:center;padding:6px 4px;font-weight:700;font-size:11px;min-width:56px}
+.tl-stat-out{color:#d97706}
+.tl-stat-comp{color:#16a34a}
+.tl-total-row{background:#f8fafc;font-weight:700}
+.tl-total-row td{border-top:2px solid #94a3b8}
+.tl-label-row{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:white}
+.tl-drag-active{cursor:grabbing!important;user-select:none}
+.tl-drag-active .tl-cell,.tl-drag-active .tl-head-date,.tl-drag-active .tl-head-plus{cursor:grabbing!important}
+
 /* Collapsible customer info */
 .collapsible-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
 .collapsible-header .toggle-icon { transition: transform 0.2s; font-size: 12px; color: var(--text-muted); }
@@ -11458,6 +11494,16 @@ function initShipmentPlanner() {
   loadSpPlans();
   const sel = document.getElementById('sp_client');
   if (!sel) return;
+  // [Opt-6] Set default month range: current month -1 to +3 (4-month window)
+  const _fromEl = document.getElementById('sp_fromMonth');
+  const _toEl   = document.getElementById('sp_toMonth');
+  if (_fromEl && !_fromEl.value) {
+    const _now = new Date();
+    const _from = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);
+    const _to   = new Date(_now.getFullYear(), _now.getMonth() + 3, 1);
+    _fromEl.value = _from.getFullYear() + '-' + String(_from.getMonth()+1).padStart(2,'0');
+    _toEl.value   = _to.getFullYear()   + '-' + String(_to.getMonth()+1).padStart(2,'0');
+  }
   const clients = Object.entries(CLIENT_CONFIGS).map(([k, cfg]) => ({ key: k, label: cfg.label }));
   customClients.forEach(cc => clients.push({ key: 'custom_' + cc.code, label: cc.label || cc.name || cc.code }));
   sel.innerHTML = '<option value="">All Clients</option>' +
@@ -11466,7 +11512,16 @@ function initShipmentPlanner() {
 }
 
 // ── Render ──────────────────────────────────────────────────────
+// [Opt-3] Debounce: prevents rapid re-renders when user changes filters quickly
+let _spRenderTimer = null;
 function renderShipmentPlanner() {
+  if (_spRenderTimer) clearTimeout(_spRenderTimer);
+  _spRenderTimer = setTimeout(function() {
+    _spRenderTimer = null;
+    renderShipmentPlannerTimeline();
+  }, 120);
+}
+function renderShipmentPlannerImmediate() {
   // Always use Timeline mode
   renderShipmentPlannerTimeline();
   return;
@@ -12261,45 +12316,27 @@ function renderShipmentPlannerTimeline() {
     months[months.length-1].count++;
   });
 
-  // ── CSS styles ──
-  let h = '<style>';
-  h += '.tl-table{font-size:11px;border-collapse:separate;border-spacing:0;min-width:600px;width:max-content;table-layout:fixed}';
-  h += '.tl-table th,.tl-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;padding:0}';
-  h += '.tl-table thead th{position:sticky;top:0;z-index:3}';
-  h += '.tl-row-month th{top:0;z-index:5}';
-  h += '.tl-row-date th{top:36px;z-index:4}';
-  h += '.tl-row-month .tl-sticky{z-index:7!important}';
-  h += '.tl-row-date .tl-sticky{z-index:6!important}';
-  h += '.tl-sticky{position:sticky;z-index:4;background:inherit}';
-  h += '.tl-sticky-l0{left:0}.tl-sticky-l1{left:100px}.tl-sticky-l2{left:160px}.tl-sticky-l3{left:220px}.tl-sticky-l4{left:300px}.tl-sticky-l5{left:375px}.tl-sticky-l6{left:450px}';
-  h += '.tl-head-month{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:#93c5fd;padding:8px 6px;font-size:12px;font-weight:700;text-align:center;letter-spacing:0.5px}';
-  h += '.tl-head-date{background:#f8fafc;padding:6px 3px;text-align:center;font-size:10px;font-weight:600;color:#475569;cursor:pointer;transition:all 0.15s;border-bottom:2px solid transparent}';
-  h += '.tl-head-date:hover{background:#dbeafe;border-bottom-color:#3b82f6}';
-  h += '.tl-head-date.tl-today{background:#3b82f6;color:white;border-radius:0}';
-  h += '.tl-head-date.tl-weekend{background:#fef2f2;color:#991b1b}';
-  h += '.tl-head-date.tl-today.tl-weekend{background:#3b82f6;color:white}';
-  h += '.tl-head-plus{background:#f1f5f9;padding:4px;text-align:center;cursor:pointer;color:#3b82f6;font-size:16px;font-weight:400;transition:background 0.15s}';
-  h += '.tl-head-plus:hover{background:#dbeafe}';
-  h += '.tl-cell{text-align:center;padding:5px 4px;font-size:11px;cursor:pointer;transition:all 0.15s;min-width:46px;border-radius:4px}';
-  h += '.tl-cell:hover{outline:2px solid #3b82f6;outline-offset:-2px;z-index:2;position:relative;box-shadow:0 0 0 1px rgba(59,130,246,0.3)}';
-  h += '.tl-cell-planned{background:#fef3c7;color:#92400e;font-weight:700;border-radius:4px}';
-  h += '.tl-cell-actual{background:#dcfce7;color:#166534;font-weight:700;border-radius:4px}';
-  h += '.tl-cell-empty{color:#94a3b8;cursor:pointer;font-size:13px}';
-  h += '.tl-cell-empty:hover{background:#dbeafe;color:#2563eb;font-size:14px;font-weight:700;outline:2px solid #3b82f6;outline-offset:-2px}';
-  h += '.tl-info{font-size:10px;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100px;background:inherit}';
-  h += '.tl-info-po{font-weight:700;color:#1e40af;min-width:100px;max-width:100px;left:0}';
-  h += '.tl-info-sm{font-size:10px;color:#64748b;min-width:60px;max-width:60px}';
-  h += '.tl-stat{text-align:center;padding:6px 4px;font-weight:700;font-size:11px;min-width:56px}';
-  h += '.tl-stat-out{color:#d97706}';
-  h += '.tl-stat-comp{color:#16a34a}';
-  h += '.tl-total-row{background:#f8fafc;font-weight:700}';
-  h += '.tl-total-row td{border-top:2px solid #94a3b8}';
-  h += '.tl-label-row{background:linear-gradient(135deg,#1e40af,#1e3a8a);color:white}';
-  h += '.tl-drag-active{cursor:grabbing!important;user-select:none}';
-  h += '.tl-drag-active .tl-cell,.tl-drag-active .tl-head-date,.tl-drag-active .tl-head-plus{cursor:grabbing!important}';
-  h += '.tl-head-date{cursor:grab}';
-  h += '.tl-cell{cursor:pointer}';
-  h += '</style>';
+  // ── [Opt-1] Pre-compute per-plan stats cache (avoids repeated getOrderQty scans) ──
+  const _planCache = new Map();
+  let _grandOrd = 0, _grandOut = 0, _grandComp = 0;
+  allPlans.forEach(p => {
+    const ordQty = getOrderQtyDisplay(p);
+    const comp = (p.actualShipments||[]).reduce((s,sh)=>s+(parseFloat(sh.qty)||0),0);
+    const planned = (p.plannedShipments||[]).reduce((s,sh)=>s+(parseFloat(sh.qty)||0),0);
+    const outstand = Math.max(0, ordQty - comp - planned);
+    // Build date-indexed lookup maps for O(1) cell access
+    const plannedMap = {};
+    (p.plannedShipments||[]).forEach(s=>{ if(s.date) plannedMap[s.date]=s; });
+    const actualMap = {};
+    (p.actualShipments||[]).forEach(s=>{ if(s.date) actualMap[s.date]=s; });
+    _planCache.set(p, { ordQty, comp, outstand, plannedMap, actualMap });
+    _grandOrd += ordQty;
+    _grandOut += outstand;
+    _grandComp += comp;
+  });
+
+  // ── [Opt-2] CSS is now static (moved to <style> block) — no inline injection ──
+  let h = '';
 
   h += '<div id="tl-scroll-area" style="overflow-x:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid #e2e8f0;border-radius:8px;max-height:calc(100vh - 320px)">';
   h += '<table class="tl-table"><thead>';
@@ -12366,6 +12403,7 @@ function renderShipmentPlannerTimeline() {
   allPlans.forEach(p => {
     const ck2 = p._clientKey||'';
     const pid = p.id||0;
+    const cache = _planCache.get(p) || {};
     h += '<tr>';
     h += '<td class="tl-sticky tl-sticky-l0 tl-info tl-info-po" style="background:white" title="' + esc(p.poNo||'') + '">' + esc(p.poNo||'') + '</td>';
     h += '<td class="tl-sticky tl-sticky-l1 tl-info tl-info-sm" style="background:white" title="' + esc(p.jobNo||'') + '">' + esc(p.jobNo||'') + '</td>';
@@ -12375,9 +12413,10 @@ function renderShipmentPlannerTimeline() {
     h += '<td class="tl-sticky tl-sticky-l5 tl-info tl-info-sm" style="background:white" title="' + esc(p.variable||'') + '">' + esc(p.variable||'') + '</td>';
     h += '<td class="tl-sticky tl-sticky-l6 tl-info tl-info-sm" style="background:white" title="' + esc(p.color||'') + '">' + esc(p.color||'') + '</td>';
 
+    // [Opt-1] O(1) Map lookup instead of Array.find
     dates.forEach(d => {
-      const planned = (p.plannedShipments||[]).find(s=>s.date===d);
-      const actual = (p.actualShipments||[]).find(s=>s.date===d);
+      const planned = cache.plannedMap ? cache.plannedMap[d] : null;
+      const actual  = cache.actualMap  ? cache.actualMap[d]  : null;
       const isToday = d===todayStr;
       let qty=0, cellCls='tl-cell tl-cell-empty', title='Click to add shipment', type='planned';
       if (actual&&actual.qty) { qty=actual.qty; cellCls='tl-cell tl-cell-actual'; title='Shipped: '+qty+' \u2014 click to edit'; type='actual'; }
@@ -12388,23 +12427,23 @@ function renderShipmentPlannerTimeline() {
     });
 
     h += '<td></td>'; // +Date alignment
-    const ordQty = getOrderQtyDisplay(p);
-    const outstand = getOutstanding(p);
-    const comp = (p.actualShipments||[]).reduce((s,sh)=>s+(parseFloat(sh.qty)||0),0);
-    h += '<td class="tl-stat" style="color:#6366f1" title="Order Qty from Order Status or plan">' + (ordQty||'—') + '</td>';
-    h += '<td class="tl-stat tl-stat-out" title="Outstanding = Ord - Shipped - Planned">' + outstand + '</td>';
-    h += '<td class="tl-stat tl-stat-comp" title="Completed (Actual Shipped)">' + comp + '</td>';
+    // [Opt-1] Use cached stats
+    h += '<td class="tl-stat" style="color:#6366f1" title="Order Qty from Order Status or plan">' + (cache.ordQty||'—') + '</td>';
+    h += '<td class="tl-stat tl-stat-out" title="Outstanding = Ord - Shipped - Planned">' + cache.outstand + '</td>';
+    h += '<td class="tl-stat tl-stat-comp" title="Completed (Actual Shipped)">' + cache.comp + '</td>';
     h += '</tr>';
   });
 
   // ── Total row ──
   h += '<tr class="tl-total-row">';
   h += '<td colspan="7" style="padding:8px 12px;font-size:11px">\U0001f4ca Total (' + allPlans.length + ' plans)</td>';
+  // [Opt-1] Use pre-built date totals map
   dates.forEach(d => {
     let planned=0, actual=0;
     allPlans.forEach(p => {
-      const pl=(p.plannedShipments||[]).find(s=>s.date===d);
-      const ac=(p.actualShipments||[]).find(s=>s.date===d);
+      const cache2 = _planCache.get(p) || {};
+      const pl = cache2.plannedMap ? cache2.plannedMap[d] : null;
+      const ac = cache2.actualMap  ? cache2.actualMap[d]  : null;
       if (pl&&pl.qty) planned+=pl.qty;
       if (ac&&ac.qty) actual+=ac.qty;
     });
@@ -12413,9 +12452,10 @@ function renderShipmentPlannerTimeline() {
     h += '<td style="text-align:center;padding:6px 2px;' + bg + ';font-size:11px;font-weight:700;min-width:44px">' + (val||'') + '</td>';
   });
   h += '<td></td>';
-  const grandOrd=allPlans.reduce((s,p)=>s+getOrderQtyDisplay(p),0);
-  const grandOut=allPlans.reduce((s,p)=>s+getOutstanding(p),0);
-  const grandComp=allPlans.reduce((s,p)=>s+(p.actualShipments||[]).reduce((ss,sh)=>ss+(parseFloat(sh.qty)||0),0),0);
+  // [Opt-1] Use pre-accumulated grand totals
+  const grandOrd = _grandOrd;
+  const grandOut = _grandOut;
+  const grandComp = _grandComp;
   h += '<td class="tl-stat" style="color:#6366f1;font-size:12px">' + grandOrd + '</td>';
   h += '<td class="tl-stat tl-stat-out" style="font-size:12px">' + grandOut + '</td>';
   h += '<td class="tl-stat tl-stat-comp" style="font-size:12px">' + grandComp + '</td>';
