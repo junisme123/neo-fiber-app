@@ -3892,6 +3892,10 @@ async function downloadExcel() {
       const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) }; // [ExportFormat] Apply custom col overrides
       const ciIndexMode = ciCfg.indexFormulaMode === true;
 
+      // Define col letters for use both inside and outside the ciIndexMode block
+      const ciQtyCol = ciCols.qty || 'E';
+      const ciAmtCol = ciCols.amount || 'G';
+
       // [TemplateEditor] Apply custom labels and hide fields to CI sheet
       ciXml = applyTemplateEditorToSheet(ciXml, ssStrings, clientKey, 'ci', ciCfg, ciCols);
 
@@ -4011,8 +4015,6 @@ async function downloadExcel() {
         // Step 5c: Fix CI SUM formulas
         const ciLastDataRow = ciStartRow + numDataRows - 1;
         const ciNewTotalRow = ciRowsToRemove > 0 ? (ciFooterRow + 1 - ciRowsToRemove) : (ciFooterRow + 1);
-        const ciQtyCol = ciCols.qty || 'E';
-        const ciAmtCol = ciCols.amount || 'G';
 
         // Update SUM(qtyCol:...) -> SUM(qtyCol{ciStartRow}:qtyCol{ciLastDataRow})
         ciXml = ciXml.replace(
