@@ -3921,36 +3921,20 @@ async function downloadExcel() {
     const sheet1Xml = buildInvoiceSheet(rows, ssTexts);
     const sheet2Xml = buildCISheet(rows, ssTexts);
 
-    // Assemble the xlsx
-    const zip = new JSZip();
-
-    // Static parts from template fragments
-    zip.file('_rels/.rels', atob(XLSX_FRAGMENTS.package_rels));
-    zip.file('[Content_Types].xml', atob(XLSX_FRAGMENTS.content_types));
-    zip.file('xl/workbook.xml', atob(XLSX_FRAGMENTS.workbook));
-    zip.file('xl/_rels/workbook.xml.rels', atob(XLSX_FRAGMENTS.workbook_rels));
-    zip.file('xl/styles.xml', atob(XLSX_FRAGMENTS.styles));
-    zip.file('xl/theme/theme1.xml', atob(XLSX_FRAGMENTS.theme));
-    zip.file('xl/sharedStrings.xml', ssXml);
-    zip.file('xl/media/image1.jpeg', atob(XLSX_FRAGMENTS.img1), { binary: true });
-    zip.file('xl/media/image2.jpeg', atob(XLSX_FRAGMENTS.img2), { binary: true });
-    zip.file('xl/drawings/drawing1.xml', atob(XLSX_FRAGMENTS.drawing1));
-    zip.file('xl/drawings/drawing2.xml', atob(XLSX_FRAGMENTS.drawing2));
-    zip.file('xl/drawings/_rels/drawing1.xml.rels', atob(XLSX_FRAGMENTS.drawing1_rels));
-    zip.file('xl/drawings/_rels/drawing2.xml.rels', atob(XLSX_FRAGMENTS.drawing2_rels));
-    zip.file('xl/worksheets/_rels/sheet1.xml.rels', atob(XLSX_FRAGMENTS.s1_drel));
-    zip.file('xl/worksheets/_rels/sheet2.xml.rels', atob(XLSX_FRAGMENTS.s2_drel));
-
-    // Dynamic sheets
-    zip.file('xl/worksheets/sheet1.xml', sheet1Xml);
-    zip.file('xl/worksheets/sheet2.xml', sheet2Xml);
-
-    // Generate blob
-    const blob = await zip.generateAsync({
-      type: 'blob',
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      compression: 'DEFLATE'
-    });
+    // Assemble the xlsx using XLSX library (includes JSZip internally)
+    // Parse the sheets into workbook format
+    const wb = XLSX.utils.book_new();
+    
+    // Use XLSX.read to parse our XML sheets into workbook objects
+    const ws1 = XLSX.read(sheet1Xml, { type: 'string', cellStyles: true }).Sheets.Sheet1;
+    const ws2 = XLSX.read(sheet2Xml, { type: 'string', cellStyles: true }).Sheets.Sheet1;
+    
+    XLSX.utils.book_append_sheet(wb, ws1, 'Invoice');
+    XLSX.utils.book_append_sheet(wb, ws2, 'Commercial Invoice');
+    
+    // Generate xlsx blob
+    const xlsxData = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
     const safeInv = invoiceNo.replace(/[/\\#\s]/g, '_');
     const defaultName = cfg.code + '_INVOICE_CI_PL_' + safeInv;
