@@ -599,7 +599,9 @@ input[type=number] { -moz-appearance: textfield; }
 @media (max-width: 640px) { .footer-modules-container { grid-template-columns: 1fr; } }
 
 </style>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
 </script>
 <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js">
 </script>
@@ -3921,18 +3923,20 @@ async function downloadExcel() {
     const sheet1Xml = buildInvoiceSheet(rows, ssTexts);
     const sheet2Xml = buildCISheet(rows, ssTexts);
 
-    // Assemble the xlsx using XLSX library (includes JSZip internally)
-    // Parse the sheets into workbook format
+    // Build sheets using XLSX library from array data
     const wb = XLSX.utils.book_new();
-    
-    // Use XLSX.read to parse our XML sheets into workbook objects
-    const ws1 = XLSX.read(sheet1Xml, { type: 'string', cellStyles: true }).Sheets.Sheet1;
-    const ws2 = XLSX.read(sheet2Xml, { type: 'string', cellStyles: true }).Sheets.Sheet1;
-    
+
+    // Sheet 1: Invoice
+    const ws1Data = buildInvoiceData(rows);
+    const ws1 = XLSX.utils.aoa_to_sheet(ws1Data);
     XLSX.utils.book_append_sheet(wb, ws1, 'Invoice');
+
+    // Sheet 2: Commercial Invoice
+    const ws2Data = buildCIData(rows);
+    const ws2 = XLSX.utils.aoa_to_sheet(ws2Data);
     XLSX.utils.book_append_sheet(wb, ws2, 'Commercial Invoice');
-    
-    // Generate xlsx blob
+
+    // Generate xlsx
     const xlsxData = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
@@ -4067,6 +4071,138 @@ function buildSharedStringsXml(texts) {
   }
   xml += '</sst>';
   return xml;
+}
+
+/**
+ * Build Invoice data as 2D array for XLSX
+ */
+function buildInvoiceData(rows) {
+  const s = getSettings();
+  const clientKey = state.selectedClient;
+  const cfg = CLIENT_CONFIGS[clientKey];
+  const invNo = document.getElementById('invoiceNo')?.value || '';
+  const invDate = document.getElementById('invoiceDate')?.value || '';
+  const poNo = document.getElementById('poNo')?.value || '';
+  const totalQty = rows.reduce((sum, r) => sum + (parseInt(r.qty) || 0), 0);
+  const totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+  const spellText = numberToWordsUSD(totalAmt);
+
+  const data = [];
+  // Row 1: Company name
+  data.push([s.companyName || 'Neo-Fiber Industrial Co., Ltd.', '', '', '', '', '', '']);
+  // Rows 2-6: empty
+  for (let i = 0; i < 5; i++) data.push(['', '', '', '', '', '', '']);
+  // Row 7: BILL TO / SHIP TO
+  data.push(['BILL TO:', '', '', 'SHIP TO:', '', '', '']);
+  // Row 8: Client names
+  data.push([cfg?.label || '', '', '', cfg?.shipTo || cfg?.label || '', '', '', '']);
+  // Rows 9-11: empty
+  for (let i = 0; i < 3; i++) data.push(['', '', '', '', '', '', '']);
+  // Row 12: Invoice No
+  data.push(['', '', '', '', 'Invoice No.:', invNo, '']);
+  // Row 13: Date
+  data.push(['', '', '', '', 'Date:', invDate, '']);
+  // Row 14: PO No
+  data.push(['', '', '', '', 'P/O No.:', poNo, '']);
+  // Rows 15-19: empty
+  for (let i = 0; i < 5; i++) data.push(['', '', '', '', '', '', '']);
+  // Row 20: Column headers
+  data.push(['PO No.', 'PG item no.', 'Flex', 'NF item no.', 'Qty (pcs)', 'Unit price', 'Amount']);
+  // Data rows
+  for (const row of rows) {
+    data.push([row.po, row.itemCode, row.flex, row.nfItem, parseFloat(row.qty) || 0, parseFloat(row.unitPrice) || 0, parseFloat(row.amount) || 0]);
+  }
+  // Pad to 37 rows (leaving space before footer)
+  while (data.length < 37) data.push(['', '', '', '', '', '', '']);
+  // Row 38: Made in China
+  data.push(['Made in China', '', '', '', '', '', '']);
+  // Row 39: Subtotal
+  data.push(['', '', '', '', totalQty, '', totalAmt]);
+  // Row 40: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 41: Says Total:
+  data.push(['Says Total:', '', '', '', '', '', '']);
+  // Rows 42-43: empty
+  data.push(['', '', '', '', '', '', '']);
+  data.push(['', '', '', '', '', '', '']);
+  // Row 44: English text
+  data.push([spellText, '', '', '', '', '', '']);
+  // Row 45: Product name / HS Code
+  data.push(['Product name', s.productName || 'Golf Shaft', '', 'HS Code', s.hsCode || '95063900', '', '']);
+  // Row 46: Material
+  data.push(['Material', s.material || 'Carbon Fiber', '', '', '', '', '']);
+  // Row 47: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 48: Made in China
+  data.push(['Made in China', '', '', '', '', '', '']);
+  // Row 49: Payment
+  data.push(['Payment', s.paymentTerms || 'By O/A 45 days', '', '', '', '', '']);
+  // Row 50: Bank
+  data.push(['Bank', s.bankName || 'DBS Bank (Taiwan) Ltd.', '', '', '', '', '']);
+  // Row 51: Bank address
+  data.push(['', s.bankAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan', '', '', '', '', '']);
+  // Row 52: A/C / Swift
+  data.push(['', 'A/C:', s.bankAccount || '7850014299', 'Swift:', s.bankSwift || 'DBSSTWTB', '', '']);
+  // Row 53: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 54: Beneficiary
+  data.push(['Beneficiary:', s.beneficiaryName || 'NEO-FIBER INDUSTRIAL CO., LTD.', '', '', '', '', '']);
+  // Row 55: Beneficiary address
+  data.push(['', s.beneficiaryAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan', '', '', '', '', '']);
+  // Row 56: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 57: Signature
+  data.push(['', 'For and on behalf of', '', '', '', '', '']);
+  // Row 58: Line
+  data.push(['', '________________________', '', '', '', '', '']);
+  // Row 59: Name
+  data.push(['', s.signatoryName || 'Annie Yu', '', '', '', '', '']);
+
+  return data;
+}
+
+/**
+ * Build CI data as 2D array for XLSX
+ */
+function buildCIData(rows) {
+  const s = getSettings();
+  const totalQty = rows.reduce((sum, r) => sum + (parseInt(r.qty) || 0), 0);
+  const totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+  const spellText = numberToWordsUSD(totalAmt);
+
+  const data = [];
+  // Rows 1-7: empty
+  for (let i = 0; i < 7; i++) data.push(['', '', '', '', '', '', '']);
+  // Row 8: Title
+  data.push(['COMMERCIAL INVOICE', '', '', '', '', '', '']);
+  // Rows 9-16: empty
+  for (let i = 0; i < 8; i++) data.push(['', '', '', '', '', '', '']);
+  // Row 17: Column headers
+  data.push(['PO No.', 'PG item no.', 'Flex', 'NF item no.', 'Qty (pcs)', 'Unit price', 'Amount']);
+  // Data rows
+  for (const row of rows) {
+    data.push([row.po, row.itemCode, row.flex, row.nfItem, parseFloat(row.qty) || 0, parseFloat(row.unitPrice) || 0, parseFloat(row.amount) || 0]);
+  }
+  // Pad to 59 rows
+  while (data.length < 59) data.push(['', '', '', '', '', '', '']);
+  // Row 60: Total
+  data.push(['', '', '', '', totalQty, '', totalAmt]);
+  // Rows 61: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 62: Says Total:
+  data.push(['Says Total:', '', '', '', '', '', '']);
+  // Row 63: empty
+  data.push(['', '', '', '', '', '', '']);
+  // Row 64: English
+  data.push([spellText, '', '', '', '', '', '']);
+  // Row 65: HS Code
+  data.push(['HS Code', s.hsCode || '95063900', '', '', '', '', '']);
+  // Row 66: Material
+  data.push(['Material :', s.material || 'Carbon Fiber', '', '', '', '', '']);
+  // Row 67: Made in China
+  data.push(['MADE IN CHINA', '', '', '', '', '', '']);
+
+  return data;
 }
 
 /**
