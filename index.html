@@ -6181,6 +6181,289 @@ function savePoForecast(rows) {
   if (_cloudEnabled) scheduleSync('nf_po_forecast', rows);
 }
 
+// ============================================================
+// INVOICE BATCH IMPORT — Phase 1
+// ============================================================
+
+let _pendingImportRecords = [];
+
+function handleInvoiceFilesUpload(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+  
+  const statusEl = document.getElementById('cf_importStatus');
+  statusEl.textContent = `⏳ Parsing ${files.length} file(s)...`;
+  _pendingImportRecords = [];
+  
+  let processed = 0;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array', cellFormula: false, cellHTML: false });
+        const records = parseInvoiceWorkbook(workbook, file.name);
+        _pendingImportRecords.push(...records);
+        processed++;
+        if (processed === files.length) {
+          statusEl.textContent = `✅ Found ${_pendingImportRecords.length} invoice record(s) from ${files.length} file(s)`;
+          renderImportPreview(_pendingImportRecords);
+        }
+      } catch (err) {
+        processed++;
+        console.error('Invoice import error:', err);
+        statusEl.textContent = `⚠️ Error parsing ${file.name}: ${err.message}`;
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function parseInvoiceWorkbook(workbook, fileName) {
+  const records = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!rows || rows.length < 3) continue;
+    const parsed = parseInvoiceSheet(rows, sheetName, fileName);
+    records.push(...parsed);
+  }
+  return records;
+}
+
+function parseInvoiceSheet(rows, sheetName, fileName) {
+  const records = [];
+  let headerRow = -1;
+  let headerMap = {};
+  const headerKeywords = {
+    invoiceNo: ['invoice no', 'invoice #', 'invoice number', 'inv no', 'inv#', 'commercial invoice no', 'commercial invoice', 'invoice'],
+    date: ['date', 'invoice date', 'inv date'],
+    poNo: ['po no', 'po#', 'p.o. no', 'po number', 'order no', 'order#', 'p/o'],
+    total: ['total amount', 'total', 'grand total', 'amount', 'total usd', 'amount usd', 'sum', 'net amount', 'invoice total'],
+    client: ['client', 'customer', 'bill to', 'sold to', 'buyer', 'to', 'company', 'consignee']
+  };
+  for (let r = 0; r < Math.min(25, rows.length); r++) {
+    const row = rows[r];
+    if (!row || row.length < 2) continue;
+    const lowerRow = row.map(c => String(c || '').toLowerCase().trim());
+    let matched = {};
+    let matchCount = 0;
+    for (let c = 0; c < row.length; c++) {
+      const cell = lowerRow[c];
+      for (const [field, keywords] of Object.entries(headerKeywords)) {
+        if (keywords.some(kw => cell.includes(kw))) {
+          if (!matched[field]) { matched[field] = c; matchCount++; }
+        }
+      }
+    }
+    if ((matched.invoiceNo && matched.date && matched.total) || 
+        (matched.invoiceNo && matched.total && matched.invoiceNo !== matched.total)) {
+      headerRow = r;
+      headerMap = matched;
+      break;
+    }
+  }
+  if (headerRow === -1) {
+    for (let r = 0; r < Math.min(40, rows.length); r++) {
+      const row = rows[r];
+      if (!row) continue;
+      let invIdx = -1, amtIdx = -1;
+      for (let c = 0; c < row.length; c++) {
+        const val = String(row[c] || '').trim();
+        if (/^[A-Z]{2,}[-\d]+$/i.test(val) || /^\d{4,}$/.test(val)) invIdx = c;
+        if (typeof row[c] === 'number' && row[c] > 100 && row[c] < 10000000) amtIdx = c;
+      }
+      if (invIdx >= 0 && amtIdx >= 0 && invIdx !== amtIdx) {
+        headerRow = r - 1;
+        if (headerRow < 0) headerRow = r;
+        headerMap = { invoiceNo: invIdx, total: amtIdx };
+        break;
+      }
+    }
+  }
+  if (headerRow === -1) return [];
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.every(c => c === '' || c === null || c === undefined)) continue;
+    const invoiceNo = headerMap.invoiceNo !== undefined ? String(row[headerMap.invoiceNo] || '').trim() : '';
+    const dateVal = headerMap.date !== undefined ? row[headerMap.date] : '';
+    const totalVal = headerMap.total !== undefined ? row[headerMap.total] : '';
+    const poVal = headerMap.poNo !== undefined ? String(row[headerMap.poNo] || '').trim() : '';
+    const clientVal = headerMap.client !== undefined ? String(row[headerMap.client] || '').trim() : '';
+    if (!invoiceNo || invoiceNo.toLowerCase().includes('total') || invoiceNo.toLowerCase().includes('grand')) continue;
+    let invoiceDate = '';
+    if (dateVal) {
+      if (typeof dateVal === 'number' && dateVal > 30000 && dateVal < 60000) {
+        const d = XLSX.SSF.parse_date_code(dateVal);
+        if (d) invoiceDate = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+      } else {
+        const dStr = String(dateVal).trim();
+        const m = dStr.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+        if (m) {
+          const p1 = parseInt(m[1]), p2 = parseInt(m[2]);
+          if (p1 <= 12 && p2 > 12) {
+            invoiceDate = `${m[3]}-${String(p1).padStart(2,'0')}-${String(p2).padStart(2,'0')}`;
+          } else {
+            invoiceDate = `${m[3]}-${String(p2).padStart(2,'0')}-${String(p1).padStart(2,'0')}`;
+          }
+        } else {
+          const iso = dStr.match(/(\d{4})[\/\-.](\d{2})[\/\-.](\d{2})/);
+          if (iso) invoiceDate = `${iso[1]}-${iso[2]}-${iso[3]}`;
+        }
+      }
+    }
+    let totalAmount = 0;
+    if (totalVal !== '' && totalVal !== null && totalVal !== undefined) {
+      if (typeof totalVal === 'number') {
+        totalAmount = totalVal;
+      } else {
+        const cleaned = String(totalVal).replace(/[$,\s]/g, '');
+        const num = parseFloat(cleaned);
+        if (!isNaN(num)) totalAmount = num;
+      }
+    }
+    if (!invoiceNo || totalAmount <= 0) continue;
+    let clientName = clientVal || '';
+    let clientKey = '';
+    if (!clientName) {
+      const nameMatch = fileName.match(/^([A-Za-z]+)/);
+      if (nameMatch) clientName = nameMatch[1];
+    }
+    if (clientName) {
+      clientKey = matchClientByName(clientName);
+    }
+    if (!clientKey && invoiceNo) {
+      const prefix = invoiceNo.split('-')[0];
+      if (prefix) {
+        clientKey = matchClientByName(prefix);
+      }
+    }
+    let paymentDays = 45;
+    if (clientKey) {
+      const cfg = getClientConfig(clientKey);
+      if (cfg && cfg.paymentDays) paymentDays = parseInt(cfg.paymentDays) || 45;
+    }
+    let paymentDate = '';
+    if (invoiceDate) {
+      const d = new Date(invoiceDate);
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + paymentDays);
+        paymentDate = d.toISOString().split('T')[0];
+      }
+    }
+    records.push({
+      invoiceNo, invoiceDate, totalAmount, paymentDate, paymentDays,
+      clientKey, clientLabel: clientKey ? (getClientConfig(clientKey)?.label || clientKey) : (clientName || 'Unknown'),
+      poNo: poVal, sourceFile: fileName, sourceSheet: sheetName, isDuplicate: false
+    });
+  }
+  const seen = new Set();
+  return records.filter(r => {
+    const key = `${r.invoiceNo}|${r.clientKey}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function matchClientByName(name) {
+  if (!name) return '';
+  const lowerName = name.toLowerCase().trim();
+  for (const [key, cfg] of Object.entries(CUSTOMER_CONFIG)) {
+    const label = (cfg.label || '').toLowerCase();
+    const keys = [key.toLowerCase(), label];
+    if (key === 'kent') keys.push('kent sports', 'kentsports');
+    if (key === 'va') keys.push('va composites', 'vacomposites');
+    if (key === 'gears') keys.push('gears sports', 'gearssports');
+    if (key === 'truejapan') keys.push('true sports japan', 'truesports japan', 'true japan', 'truesportsjapan', 'truejapan');
+    if (key === 'pg_ca') keys.push('pg canada', 'pgcanada', 'pgca', 'pg-ca');
+    if (key === 'pg_us') keys.push('pg us', 'pgus', 'pg-us', 'pgusa', 'pg usa');
+    if (keys.some(k => lowerName.includes(k) || k.includes(lowerName))) {
+      return key;
+    }
+  }
+  for (const [key, cfg] of Object.entries(CUSTOMER_CONFIG)) {
+    const label = (cfg.label || '').toLowerCase();
+    const words = lowerName.split(/[\s\-_]+/);
+    for (const w of words) {
+      if (w.length >= 2 && (label.includes(w) || key.toLowerCase().includes(w))) {
+        return key;
+      }
+    }
+  }
+  return '';
+}
+
+function renderImportPreview(records) {
+  const container = document.getElementById('cf_importPreview');
+  if (!records.length) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No valid invoice records found in uploaded files.</div>';
+    return;
+  }
+  const existing = loadCashflowRecords();
+  const existingKeys = new Set(existing.map(r => `${r.invoiceNo}|${r.clientKey}`));
+  records.forEach(r => {
+    r.isDuplicate = existingKeys.has(`${r.invoiceNo}|${r.clientKey}`);
+  });
+  const newRecords = records.filter(r => !r.isDuplicate);
+  const dupRecords = records.filter(r => r.isDuplicate);
+  let html = `<div style="font-size:12px;font-weight:600;color:var(--primary);margin-bottom:6px">Import Preview: ${newRecords.length} new, ${dupRecords.length} duplicate</div>`;
+  if (newRecords.length > 0) {
+    html += `<table class="history-table" style="font-size:12px;margin-bottom:10px"><thead><tr><th>Invoice No.</th><th>Client</th><th>Date</th><th>Payment Due</th><th>Amount</th><th>Status</th></tr></thead><tbody>
+      ${newRecords.map(r => `<tr>
+        <td><strong>${escapeXml(r.invoiceNo)}</strong></td>
+        <td>${escapeXml(r.clientLabel)} <span style="font-size:10px;color:var(--text-muted)">(${r.clientKey||'unmatched'})</span></td>
+        <td>${r.invoiceDate || '—'}</td>
+        <td>${r.paymentDate || '—'} <span style="font-size:10px;color:var(--text-muted)">(+${r.paymentDays}d)</span></td>
+        <td style="color:var(--primary);font-weight:600">$${r.totalAmount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+        <td><span class="badge" style="background:#dbeafe;color:#1e40af">New</span></td>
+      </tr>`).join('')}
+    </tbody></table>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="confirmImportRecords()">✅ Import ${newRecords.length} Records</button>
+      <button class="btn btn-outline btn-sm" onclick="resetImportPreview()">❌ Cancel</button>
+    </div>`;
+  } else {
+    html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">All records already exist in Cashflow.</div><button class="btn btn-outline btn-sm" onclick="resetImportPreview()">Clear</button>`;
+  }
+  if (dupRecords.length > 0) {
+    html += `<details style="margin-top:10px"><summary style="font-size:11px;color:var(--text-muted);cursor:pointer">${dupRecords.length} duplicate(s) skipped — click to view</summary>
+      <table class="history-table" style="font-size:11px;margin-top:6px;opacity:0.7"><thead><tr><th>Invoice No.</th><th>Client</th><th>Amount</th></tr></thead><tbody>
+        ${dupRecords.map(r => `<tr><td>${escapeXml(r.invoiceNo)}</td><td>${escapeXml(r.clientLabel)}</td><td>$${r.totalAmount.toFixed(2)}</td></tr>`).join('')}
+      </tbody></table></details>`;
+  }
+  container.innerHTML = html;
+}
+
+function confirmImportRecords() {
+  const newRecords = _pendingImportRecords.filter(r => !r.isDuplicate);
+  if (!newRecords.length) {
+    toast('No new records to import', 'info');
+    return;
+  }
+  const existing = loadCashflowRecords();
+  newRecords.forEach(r => {
+    existing.push({
+      invoiceNo: r.invoiceNo, clientKey: r.clientKey, clientLabel: r.clientLabel,
+      invoiceDate: r.invoiceDate, paymentDate: r.paymentDate, paymentDays: r.paymentDays,
+      totalAmount: r.totalAmount, currency: 'USD', items: [],
+      importedFromFile: r.sourceFile, createdAt: new Date().toISOString()
+    });
+  });
+  saveCashflowRecords(existing);
+  _pendingImportRecords = [];
+  resetImportPreview();
+  renderCashflow();
+  toast(`✅ Imported ${newRecords.length} invoice record(s) into Cashflow`, 'success');
+}
+
+function resetImportPreview() {
+  _pendingImportRecords = [];
+  document.getElementById('cf_importPreview').innerHTML = '';
+  document.getElementById('cf_importStatus').textContent = '';
+  document.getElementById('cf_invoiceFileUpload').value = '';
+}
+
 function renderCashflow() {
   const records = loadCashflowRecords();
   const poRows = loadPoForecast();
@@ -14604,6 +14887,24 @@ function parseExcelDate(val) {
       <div id="cf_chartArea" style="margin-bottom:20px"></div>
       <!-- Monthly Table -->
       <div id="cf_monthlyTable"></div>
+      <!-- Invoice Batch Import -->
+      <div id="cf_importArea" style="margin-top:12px">
+        <div style="border:2px dashed var(--border);border-radius:8px;padding:14px;background:#f8fafc">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="font-weight:700;font-size:13px;color:var(--primary)">📥 Batch Import Invoices</div>
+            <span style="font-size:11px;color:var(--text-muted)">Import previously generated Invoice / CI Excel files into Cashflow</span>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+            <label class="btn btn-primary" style="cursor:pointer">
+              📁 Select Invoice Excel (.xlsx / .xlsm)
+              <input type="file" id="cf_invoiceFileUpload" accept=".xlsx,.xlsm" multiple style="display:none" onchange="handleInvoiceFilesUpload(event)">
+            </label>
+            <span id="cf_importStatus" style="font-size:12px;color:var(--text-muted)"></span>
+          </div>
+          <div id="cf_importPreview" style="margin-top:8px"></div>
+        </div>
+      </div>
+
       <!-- Invoice Detail List -->
       <div id="cf_invoiceList" style="margin-top:20px"></div>
     </div>
