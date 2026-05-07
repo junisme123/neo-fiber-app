@@ -3578,11 +3578,16 @@ async function downloadExcel() {
         }
         const val = row[field];
         if (val === undefined || val === null || val === '') continue;
+        // Ensure NF Item values are forced as text in Excel by prefixing single quote
+        let exportVal = val;
+        if (field === 'nfItem' && exportVal && !String(exportVal).startsWith("'")) {
+          exportVal = "'" + exportVal;
+        }
         if (field === 'qty' || field === 'unitPrice' || field === 'amount') {
-          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, val, 'number');
+          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, exportVal, 'number');
         } else {
           // Use sharedStrings for text values to avoid Excel corruption
-          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, val, 'sharedStr');
+          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, exportVal, 'sharedStr');
         }
       }
     });
@@ -3822,10 +3827,15 @@ async function downloadExcel() {
             }
             const val = row[field];
             if (val === undefined || val === null || val === '') continue;
+            // Ensure NF Item values are forced as text in Excel by prefixing single quote
+            let exportVal = val;
+            if (field === 'nfItem' && exportVal && !String(exportVal).startsWith("'")) {
+              exportVal = "'" + exportVal;
+            }
             if (field === 'qty' || field === 'unitPrice' || field === 'amount') {
-              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, val, 'number');
+              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, exportVal, 'number');
             } else {
-              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, val, 'sharedStr');
+              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, exportVal, 'sharedStr');
             }
           }
         });
@@ -5091,6 +5101,7 @@ function renderCustInfoForm() {
       ${extraFields}
     </div>
     ${renderExportFormatEditor(key)}
+    ${renderExportTemplateEditor(key)}
     <div class="info-save-bar">
       <button class="btn btn-outline" onclick="resetCustInfo('${key}')">↺ Reset to Default</button>
       <button class="btn btn-success" onclick="saveCustInfo('${key}')">💾 Save Changes</button>
@@ -5361,6 +5372,294 @@ function resetAllExportCols(clientKey) {
   renderCustInfoForm();
   toast('↺ Column mappings reset to default', 'info');
 }
+
+// ══════════════════════════════════════════════════════════════════
+// EXPORT TEMPLATE PREVIEW EDITOR — per-client template customization
+// ══════════════════════════════════════════════════════════════════
+
+const _etStorageKey = (clientKey) => 'nf_export_template_' + clientKey;
+
+function loadExportTemplate(clientKey) {
+  try {
+    const raw = localStorage.getItem(_etStorageKey(clientKey));
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function saveExportTemplate(clientKey, template) {
+  localStorage.setItem(_etStorageKey(clientKey), JSON.stringify(template));
+}
+
+function resetExportTemplate(clientKey) {
+  localStorage.removeItem(_etStorageKey(clientKey));
+}
+
+/** Get effective label for a field, using custom template if available */
+function getEffectiveLabel(clientKey, docType, field, defaultLabel) {
+  const tmpl = loadExportTemplate(clientKey);
+  if (tmpl && tmpl[docType] && tmpl[docType].labels && tmpl[docType].labels[field]) {
+    return tmpl[docType].labels[field];
+  }
+  return defaultLabel;
+}
+
+/** Check if a field is disabled in the template */
+function isFieldDisabled(clientKey, docType, field) {
+  const tmpl = loadExportTemplate(clientKey);
+  if (tmpl && tmpl[docType] && tmpl[docType].disabledFields) {
+    return tmpl[docType].disabledFields.includes(field);
+  }
+  return false;
+}
+
+/** Build a visual preview table for the template */
+function buildTemplatePreview(docType, fields, labels, disabledFields, baseCols) {
+  const visibleFields = fields.filter(f => !disabledFields.includes(f));
+  if (visibleFields.length === 0) return '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:12px">No fields enabled</div>';
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  // Header row
+  html += '<tr style="background:#1e3a5c;color:white">';
+  visibleFields.forEach(f => {
+    const info = EF_FIELD_INFO[f] || { label: f };
+    const label = labels[f] || info.label;
+    html += `<th style="padding:5px 8px;text-align:left;font-weight:600;border:1px solid #d0d9e3">${escapeXml(label)}</th>`;
+  });
+  html += '</tr>';
+  // Sample data row
+  const sampleData = {
+    po: 'KS-2026-001',
+    itemCode: 'APNLOW-6S',
+    flex: 'R',
+    nfItem: "'KSI360AB#1",
+    qty: '1,200',
+    unitPrice: '10.00',
+    amount: '12,000.00'
+  };
+  html += '<tr style="background:white">';
+  visibleFields.forEach(f => {
+    html += `<td style="padding:4px 8px;border:1px solid #e2e8f0;color:#334155">${escapeXml(sampleData[f] || '')}</td>`;
+  });
+  html += '</tr>';
+  html += '</table>';
+  return html;
+}
+
+/** Render the Export Template Preview & Editor */
+function renderExportTemplateEditor(clientKey) {
+  const cfg = getClientConfig(clientKey);
+  if (!cfg) return '';
+
+  const tmpl = loadExportTemplate(clientKey) || {};
+  const docTypes = ['invoice'];
+  if (cfg.hasCI) docTypes.push('ci');
+  if (cfg.hasPL) docTypes.push('pl');
+
+  const docLabels = { invoice: '📄 Invoice', ci: '📦 Commercial Invoice (CI)', pl: '📋 Packing List (PL)' };
+
+  let html = `
+  <div style="margin-top:20px;border-top:2px solid #e2e8f0;padding-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div>
+        <div style="font-weight:700;color:#1e3a5c;font-size:14px">📋 Export Template — Preview & Editor</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px">Customize field labels, show/hide columns, and add static text rows</div>
+      </div>
+      <button onclick="resetAllExportTemplates('${clientKey}')" style="padding:5px 12px;border:1px solid #fca5a5;border-radius:6px;background:#fef2f2;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600">↺ Reset All</button>
+    </div>`;
+
+  docTypes.forEach(dt => {
+    const baseCols = cfg[dt] && cfg[dt].cols ? cfg[dt].cols : null;
+    if (!baseCols) return;
+
+    const dtTmpl = tmpl[dt] || {};
+    const labels = dtTmpl.labels || {};
+    const staticRows = dtTmpl.staticRows || [];
+    const disabledFields = dtTmpl.disabledFields || [];
+    const fields = Object.keys(baseCols).filter(f => f !== 'line');
+
+    html += `
+    <div style="margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+      <div style="background:#f1f5f9;padding:8px 14px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-weight:700;font-size:12px;color:#1e3a5c">${docLabels[dt] || dt.toUpperCase()}</span>
+        <span style="font-size:10px;color:#64748b">${fields.length} fields</span>
+      </div>
+
+      <!-- Field Labels Editor -->
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:#f8fafc">
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;width:32px">#</th>
+            <th style="padding:7px 12px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;width:40px">Show</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Field</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Default Label</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#1e40af;border-bottom:1px solid #e2e8f0;background:#eff6ff">Custom Label</th>
+            <th style="padding:7px 12px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;width:60px">Col</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+    fields.forEach((field, idx) => {
+      const defaultLabel = (EF_FIELD_INFO[field] || { label: field }).label;
+      const customLabel = labels[field] || '';
+      const isDisabled = disabledFields.includes(field);
+      const rowBg = idx % 2 === 0 ? 'white' : '#f8fafc';
+
+      html += `
+          <tr style="background:${rowBg};opacity:${isDisabled ? '0.5' : '1'}">
+            <td style="padding:6px 12px;color:#94a3b8;font-size:11px">${idx + 1}</td>
+            <td style="padding:6px 12px;text-align:center">
+              <input type="checkbox" ${isDisabled ? '' : 'checked'}
+                onchange="onTemplateFieldToggle('${clientKey}','${dt}','${field}',this.checked)"
+                style="cursor:pointer;width:16px;height:16px">
+            </td>
+            <td style="padding:6px 12px">
+              <span style="font-size:13px;margin-right:5px">${(EF_FIELD_INFO[field] || { icon: '·' }).icon}</span>
+              <span style="font-weight:600;color:#1e293b">${defaultLabel}</span>
+            </td>
+            <td style="padding:6px 12px;color:#64748b;font-size:11px">${defaultLabel}</td>
+            <td style="padding:6px 12px;background:#eff6ff">
+              <input type="text" id="et_label_${clientKey}_${dt}_${field}"
+                value="${escapeXml(customLabel)}"
+                placeholder="${escapeXml(defaultLabel)}"
+                onchange="onTemplateLabelChange('${clientKey}','${dt}','${field}',this.value)"
+                style="padding:4px 8px;border:1.5px solid ${customLabel ? '#3b82f6' : '#cbd5e1'};border-radius:5px;font-size:12px;background:${customLabel ? '#eff6ff' : 'white'};color:${customLabel ? '#1e40af' : '#475569'};width:100%;box-sizing:border-box">
+            </td>
+            <td style="padding:6px 12px;text-align:center">
+              <span style="background:#f1f5f9;color:#475569;padding:3px 8px;border-radius:5px;font-weight:700;font-family:monospace;font-size:12px">${baseCols[field] || '—'}</span>
+            </td>
+          </tr>`;
+    });
+
+    html += `
+        </tbody>
+      </table>
+      </div>
+
+      <!-- Static Text Rows -->
+      <div style="padding:10px 14px;border-top:1px solid #e2e8f0;background:#fafafa">
+        <div style="font-weight:600;font-size:11px;color:#475569;margin-bottom:8px">Custom Static Text Rows</div>`;
+
+    if (staticRows.length === 0) {
+      html += `<div style="font-size:11px;color:#94a3b8;font-style:italic;margin-bottom:8px">No custom rows yet. Add text that will appear in the exported document.</div>`;
+    } else {
+      staticRows.forEach((sr, sIdx) => {
+        html += `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <select onchange="onTemplateStaticPosChange('${clientKey}','${dt}',${sIdx},this.value)" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:11px;width:100px;flex-shrink:0">
+            <option value="header" ${sr.position === 'header' ? 'selected' : ''}>Header</option>
+            <option value="footer" ${sr.position === 'footer' ? 'selected' : ''}>Footer</option>
+            <option value="beforeData" ${sr.position === 'beforeData' ? 'selected' : ''}>Before Data</option>
+            <option value="afterData" ${sr.position === 'afterData' ? 'selected' : ''}>After Data</option>
+          </select>
+          <input type="text" value="${escapeXml(sr.text || '')}"
+            onchange="onTemplateStaticTextChange('${clientKey}','${dt}',${sIdx},this.value)"
+            placeholder="Enter static text..."
+            style="flex:1;padding:4px 8px;border:1.5px solid #cbd5e1;border-radius:5px;font-size:12px;min-width:0">
+          <button onclick="deleteTemplateStaticRow('${clientKey}','${dt}',${sIdx})" style="padding:3px 8px;border:1px solid #fca5a5;border-radius:4px;background:#fef2f2;color:#dc2626;font-size:11px;cursor:pointer;flex-shrink:0">🗑</button>
+        </div>`;
+      });
+    }
+
+    html += `
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button onclick="addTemplateStaticRow('${clientKey}','${dt}')" style="padding:5px 12px;border:1.5px dashed #cbd5e1;border-radius:6px;background:white;color:#475569;font-size:12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:4px">➕ Add Static Text Row</button>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div style="padding:10px 14px;border-top:1px solid #e2e8f0">
+        <div style="font-weight:600;font-size:11px;color:#475569;margin-bottom:8px">Preview</div>
+        <div style="overflow-x:auto;background:white;border:1px solid #e2e8f0;border-radius:6px;padding:8px">
+          ${buildTemplatePreview(dt, fields, labels, disabledFields, baseCols)}
+        </div>
+      </div>
+    </div>`;
+  });
+
+  html += `
+    <div style="font-size:10px;color:#94a3b8;margin-top:6px;padding:6px 10px;background:#f8fafc;border-radius:6px">
+      💡 <strong>Tip:</strong> Leave Custom Label empty to use the default. Hidden fields will be omitted in export. Static rows appear in the exported document.
+    </div>
+  </div>`;
+
+  return html;
+}
+
+// ── Template Editor Event Handlers ──
+
+function onTemplateFieldToggle(clientKey, docType, field, isChecked) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType]) tmpl[docType] = {};
+  if (!tmpl[docType].disabledFields) tmpl[docType].disabledFields = [];
+
+  if (isChecked) {
+    tmpl[docType].disabledFields = tmpl[docType].disabledFields.filter(f => f !== field);
+  } else {
+    if (!tmpl[docType].disabledFields.includes(field)) {
+      tmpl[docType].disabledFields.push(field);
+    }
+  }
+
+  saveExportTemplate(clientKey, tmpl);
+  renderCustInfoForm();
+  toast(isChecked ? `✓ ${field} enabled` : `✗ ${field} hidden in export`, 'info');
+}
+
+function onTemplateLabelChange(clientKey, docType, field, value) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType]) tmpl[docType] = {};
+  if (!tmpl[docType].labels) tmpl[docType].labels = {};
+
+  if (value.trim()) {
+    tmpl[docType].labels[field] = value.trim();
+  } else {
+    delete tmpl[docType].labels[field];
+  }
+
+  saveExportTemplate(clientKey, tmpl);
+  renderCustInfoForm();
+  toast('✓ Label updated', 'success');
+}
+
+function onTemplateStaticPosChange(clientKey, docType, idx, value) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType] || !tmpl[docType].staticRows || !tmpl[docType].staticRows[idx]) return;
+  tmpl[docType].staticRows[idx].position = value;
+  saveExportTemplate(clientKey, tmpl);
+}
+
+function onTemplateStaticTextChange(clientKey, docType, idx, value) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType] || !tmpl[docType].staticRows || !tmpl[docType].staticRows[idx]) return;
+  tmpl[docType].staticRows[idx].text = value.trim();
+  saveExportTemplate(clientKey, tmpl);
+}
+
+function addTemplateStaticRow(clientKey, docType) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType]) tmpl[docType] = {};
+  if (!tmpl[docType].staticRows) tmpl[docType].staticRows = [];
+  tmpl[docType].staticRows.push({ position: 'footer', text: '' });
+  saveExportTemplate(clientKey, tmpl);
+  renderCustInfoForm();
+}
+
+function deleteTemplateStaticRow(clientKey, docType, idx) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  if (!tmpl[docType] || !tmpl[docType].staticRows) return;
+  tmpl[docType].staticRows.splice(idx, 1);
+  saveExportTemplate(clientKey, tmpl);
+  renderCustInfoForm();
+}
+
+function resetAllExportTemplates(clientKey) {
+  if (!confirm('Reset all export template customizations for this client?')) return;
+  resetExportTemplate(clientKey);
+  renderCustInfoForm();
+  toast('Template reset to default', 'info');
+}
+
 
 // ============================================================
 // HISTORY TAB
