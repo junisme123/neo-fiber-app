@@ -3915,14 +3915,6 @@ async function downloadExcel() {
     const invoiceNo = document.getElementById('invoiceNo')?.value || '';
     const invoiceDate = document.getElementById('invoiceDate')?.value || '';
 
-    // Build shared strings from all texts
-    const ssTexts = buildAllSharedStrings(clientKey, rows, state.docType);
-    const ssXml = buildSharedStringsXml(ssTexts);
-
-    // Build sheets using template fragments
-    const sheet1Xml = buildInvoiceSheet(rows, ssTexts);
-    const sheet2Xml = buildCISheet(rows, ssTexts);
-
     // Build sheets using XLSX library from array data
     const wb = XLSX.utils.book_new();
 
