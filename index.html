@@ -3889,920 +3889,73 @@ function updateSumFormulas(sheetXml, amountCol, qtyCol, startRow, lastDataRow) {
   return sheetXml;
 }
 
+// ============================================================
+// PURE CODE-GENERATED XLSX EXPORT ENGINE
+// Template fragments extracted from Master Template-no Flex.xlsx
+// ============================================================
+
 async function downloadExcel() {
   const clientKey = state.selectedClient;
-  if (!clientKey) { toast('Please select a client first', 'error'); return; }
+  if (!clientKey) { toast('Please select a client first.', 'error'); return; }
 
-  const invoiceNo = document.getElementById('invoiceNo')?.value?.trim();
-  const invoiceDate = document.getElementById('invoiceDate')?.value?.trim();
-  
-  // Validation: Invoice No
-  if (!invoiceNo) { toast('Please enter Invoice No.', 'error'); return; }
-  if (!/^[A-Za-z0-9#\-\/]+$/.test(invoiceNo)) { toast('Invoice No. can only contain letters, numbers, #, -, /', 'error'); return; }
-  
-  // Validation: Date
-  if (!invoiceDate) { toast('Please enter Date', 'error'); return; }
-
-  // Validation: Check for valid rows
-  const cartonDescEl = document.getElementById('cartonDesc');
-  const cartonDesc = cartonDescEl ? cartonDescEl.value.trim() : '';
-  const rows = collectRows().filter(r => {
-    // Filter out completely empty rows
-    const vals = Object.values(r).filter(v => v && v.trim());
-    return vals.length > 0;
-  });
-  
-  // Validation: At least one valid row with item code
-  const validRows = rows.filter(r => r.itemCode && r.itemCode.trim());
-  if (validRows.length === 0) { toast('Please add at least one valid item with Item Code', 'error'); return; }
-  
-  // Validation: Check for negative qty/price
-  for (const r of validRows) {
-    const qty = parseFloat(r.qty) || 0;
-    const price = parseFloat(r.unitPrice) || 0;
-    if (qty < 0) { toast('Qty cannot be negative', 'error'); return; }
-    if (price < 0) { toast('Unit Price cannot be negative', 'error'); return; }
-  }
-
-  const cfg = getClientConfig(clientKey);
-  if (!cfg) { toast('Client config not found', 'error'); return; }
-
-  // Get template: use custom client's uploaded template if available
-  let templateB64;
-  if (clientKey.startsWith('custom_')) {
-    const ccCode = clientKey.replace('custom_', '');
-    const ccObj = customClients.find(c => c.code === ccCode);
-    if (ccObj && ccObj.templateB64) {
-      templateB64 = ccObj.templateB64;
-    } else {
-      // No template uploaded - use default template based on cc.defaultTemplate or cc.hasCI
-      const defTpl = ccObj?.defaultTemplate || 'auto';
-      let fallbackKey;
-      if (defTpl === 'auto') {
-        // Use MASTER template as default for all custom clients
-        fallbackKey = 'MASTER';
-      } else {
-        fallbackKey = defTpl; // e.g. 'KS', 'TTJ', 'VA'
-      }
-      templateB64 = TEMPLATES_B64[fallbackKey];
-      if (!templateB64) {
-        toast('⚠ No Excel template found for this client. Please go to Custom Clients → Edit → Import from Excel Template to upload your .xlsx template first.', 'error');
-        return;
-      }
-      toast(`ℹ Using default template (${fallbackKey}) for ${ccObj?.name || clientKey}`, 'info');
-    }
-  } else {
-    templateB64 = TEMPLATES_B64[clientKey];
-  }
-  if (!templateB64) { toast('Template not found for ' + clientKey, 'error'); return; }
-
-  // [No-Flex Template] If Template Editor has 'flex' hidden, switch to no-flex template
-  const _tmpl = loadExportTemplate(clientKey);
-  const _docTmpl = _tmpl && _tmpl[state.docType];
-  const _flexHidden = _docTmpl && _docTmpl.disabledFields && _docTmpl.disabledFields.includes('flex');
-  if (_flexHidden && typeof MASTER_NO_FLEX_TEMPLATE_B64 !== 'undefined' && MASTER_NO_FLEX_TEMPLATE_B64) {
-    templateB64 = MASTER_NO_FLEX_TEMPLATE_B64;
-  }
+  const btn = document.getElementById('btnDownload');
+  btn.textContent = '⏳ Generating...';
+  btn.disabled = true;
 
   try {
-    // Load JSZip
-    if (typeof JSZip === 'undefined') {
-      toast('Loading JSZip library...', 'info');
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
-    }
-
-    // Decode base64 template
-    const binaryStr = atob(templateB64);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-
-    const zip = await JSZip.loadAsync(bytes);
-    let docCfg = cfg[state.docType];
-
-    // [No-Flex Template] When flex is hidden, switch to no-flex column layout
-    if (_flexHidden && docCfg.cols && docCfg.cols.flex) {
-      // No-flex template: A=po, B=itemCode, C=nfItem, D=qty, E=unitPrice, F=amount
-      docCfg = { ...docCfg, cols: { po: 'A', itemCode: 'B', nfItem: 'C', qty: 'D', unitPrice: 'E', amount: 'F', line: docCfg.cols.line } };
-    }
-
-    const sheetPath = docCfg.sheetFile;
-    let sheetXml = await zip.file(sheetPath).async('string');
-
-    // Also get sharedStrings
-    let ssXml = await zip.file('xl/sharedStrings.xml').async('string');
-    const ssStrings = parseSharedStrings(ssXml);
-
-    // Function to set cell value in XML
-    sheetXml = setCellValue(sheetXml, ssStrings, docCfg.invoiceNoCell, invoiceNo, 'inlineStr');
-
-    // Date cell
-    if (docCfg.dateCellRef) {
-      const existingDate = getCellValue(sheetXml, ssStrings, docCfg.dateCellRef);
-      let dateLabel = '';
-      if (existingDate && (existingDate.includes('Date') || existingDate.includes('date') || existingDate.includes('DATE'))) {
-        dateLabel = existingDate.split(':')[0].trim() + ' : ';
-      }
-      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.dateCellRef, dateLabel + invoiceDate, 'inlineStr');
-    }
-
-    // Carton description
-    if (docCfg.cartonCellRef && cartonDesc) {
-      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.cartonCellRef, cartonDesc, 'inlineStr');
-    }
-
-    // Customer info - update address cells
-    const custInfo = clientKey.startsWith('custom_')
-      ? buildCustomClientInfo(clientKey)
-      : (customerInfo[clientKey] || DEFAULT_CUSTOMER_INFO[clientKey]);
-
-    if (custInfo) {
-      sheetXml = applyCustomerInfo(sheetXml, ssStrings, clientKey, custInfo);
-    }
-
-
-    // ── Modular Footer: Bank, Beneficiary, Product Info from Settings ──
-    const _settings = getSettings();
-    const _totalAmtForFooter = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-    const _footerOffset2 = docCfg._footerOffset || 0;
-    function wf(cellRef, value, type) {
-      if (!cellRef || value == null || value === '') return;
-      const adj = cellRef.replace(/(\d+)$/, n => String(parseInt(n) + _footerOffset2));
-      sheetXml = setCellValue(sheetXml, ssStrings, adj, value, type || 'sharedStr');
-    }
-    // Product Info (rows 45-48)
-    const prodRow = docCfg.footerRow ? docCfg.footerRow + 7 : 45;
-    wf('A' + prodRow, 'Product name : ' + (_settings.productName || 'Golf Shaft'), 'sharedStr');
-    wf('A' + (prodRow + 1), 'Made in China', 'sharedStr');
-    wf('A' + (prodRow + 2), 'HS CODE#' + (_settings.hsCode || '95063900'), 'sharedStr');
-    wf('A' + (prodRow + 3), 'MATERIAL : ' + (_settings.material || 'Carbon Fiber'), 'sharedStr');
-    // Payment Terms
-    const payRow = docCfg.paymentCell ? parseInt(docCfg.paymentCell.match(/\d+/)[0]) : (prodRow + 4);
-    if (payRow) wf('A' + payRow, 'Payment : ' + (_settings.paymentTerms || 'By O/A 45 days'), 'sharedStr');
-    // Bank Info (rows 50-53)
-    const bankRow = docCfg.footerRow ? docCfg.footerRow + 12 : 50;
-    wf('A' + bankRow, 'Banker :', 'sharedStr');
-    wf('B' + bankRow, _settings.bankName || 'DBS Bank (Hong Kong) Ltd', 'sharedStr');
-    wf('B' + (bankRow + 1), _settings.bankAddress || '', 'sharedStr');
-    wf('B' + (bankRow + 2), 'U.S. Dollars Saving account no. ' + (_settings.bankAccount || ''), 'sharedStr');
-    wf('B' + (bankRow + 3), 'Swift no. ' + (_settings.bankSwift || ''), 'sharedStr');
-    // Beneficiary
-    const benRow = bankRow + 4;
-    wf('A' + benRow, 'Beneficiary :', 'sharedStr');
-    wf('B' + benRow, _settings.beneficiaryName || 'NEO-FIBER  INDUSTRIAL  CO  LTD', 'sharedStr');
-    // Signature
-    const sigRow = benRow + 3;
-    wf('A' + sigRow, 'For and on behalf of', 'sharedStr');
-    wf('A' + (sigRow + 1), _settings.companyName || 'Neo-Fiber Industrial Co Ltd', 'sharedStr');
-    wf('A' + (sigRow + 6), _settings.signatoryName || 'Annie Yu', 'sharedStr');
-
-    // ── Data rows: fill data + remove surplus pre-allocated rows ──
-    const startRow = docCfg.dataStartRow;
-    const footerRow = docCfg.footerRow || (startRow + 50);
-    let cols = { ...getEffectiveCols(clientKey, state.docType, docCfg.cols) }; // [ExportFormat] Apply custom col overrides
-    // [No-Flex Template] Force no-flex column layout when flex is hidden
-    if (_flexHidden) {
-      cols = { po: 'A', itemCode: 'B', nfItem: 'C', qty: 'D', unitPrice: 'E', amount: 'F', line: cols.line };
-    }
-    const numDataRows = rows.length;
-    const isCustomClient = clientKey.startsWith('custom_');
-
-    // [TemplateEditor] Apply custom labels and hide fields to Invoice sheet
-    sheetXml = applyTemplateEditorToSheet(sheetXml, ssStrings, clientKey, state.docType, docCfg, cols);
-
-    // Step 1a: For custom clients, ensure all required data rows exist in XML
-    // If the template only has 1 pre-allocated row but user has more data rows,
-    // we need to clone the template row and insert new rows.
-    if (isCustomClient && numDataRows > 1) {
-      // Find which rows already exist in the sheet XML
-      const existingRowNums = new Set();
-      const rowScanPre = /<row[^>]*\sr="(\d+)"/g;
-      let mPre;
-      while ((mPre = rowScanPre.exec(sheetXml)) !== null) {
-        existingRowNums.add(parseInt(mPre[1]));
-      }
-
-      // Find the template row (dataStartRow) to clone for new rows
-      const templateRowNum = startRow;
-      // Use a flexible regex that matches r="N" anywhere in the row tag attributes
-      const templateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${templateRowNum}"([^>]*)>([\\s\\S]*?)<\/row>`);
-      const templateRowMatch = sheetXml.match(templateRowPat);
-
-      if (templateRowMatch) {
-        // Build new rows for rows that don't exist yet
-        const newRowsHtml = [];
-        for (let i = 1; i < numDataRows; i++) {
-          const newRowNum = startRow + i;
-          if (!existingRowNums.has(newRowNum)) {
-            // Clone template row with updated row number and empty cell values
-            let newRowXml = templateRowMatch[0]
-              // Update row r attribute (handles both " r="N"" and "<row r="N"")
-              .replace(new RegExp(`\\br="${templateRowNum}"`), `r="${newRowNum}"`)
-              // Update all cell refs (e.g. A22 -> A23)
-              .replace(new RegExp(`r="([A-Z]+)${templateRowNum}"`, 'g'), `r="$1${newRowNum}"`)
-              // Clear all cell values (keep style)
-              .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
-                (m, attrs) => {
-                  // Remove t attribute and clear value
-                  const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
-                  return `<c${cleanAttrs}></c>`;
-                });
-            newRowsHtml.push(newRowXml);
-          }
-        }
-
-        // Insert new rows after the template row
-        if (newRowsHtml.length > 0) {
-          const insertAfter = templateRowMatch[0];
-          sheetXml = sheetXml.replace(insertAfter, insertAfter + newRowsHtml.join(''));
-          
-          // For Master Template: shift footer rows down by the number of extra rows inserted
-          // The template has (footerRow - dataStartRow) pre-allocated rows
-          // If numDataRows > preAllocated, we inserted (numDataRows - preAllocated) extra rows
-          const preAllocated = footerRow - startRow; // e.g. 38-21 = 17
-          const extraRows = newRowsHtml.length; // rows inserted beyond pre-allocated
-          if (extraRows > 0 && docCfg.saysTotalCell) {
-            // Shift all rows >= footerRow down by extraRows
-            const footerRowNums = [];
-            const footerScan = /<row[^>]*\sr="(\d+)"/g;
-            let fMatch;
-            while ((fMatch = footerScan.exec(sheetXml)) !== null) {
-              const rn = parseInt(fMatch[1]);
-              if (rn >= footerRow) footerRowNums.push(rn);
-            }
-            footerRowNums.sort((a, b) => b - a); // descending
-            for (const oldRow of footerRowNums) {
-              const newRow = oldRow + extraRows;
-              sheetXml = sheetXml.replace(
-                new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'),
-                '$1r="' + newRow + '"'
-              );
-              sheetXml = sheetXml.replace(
-                new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'),
-                'r="$1' + newRow + '"'
-              );
-            }
-            // Update docCfg footer references dynamically
-            // We need to update the footerRow and related cells for this render
-            // Store the offset in a local variable for use in Step 3b/3c
-            docCfg._footerOffset = (docCfg._footerOffset || 0) + extraRows;
-          }
-        }
-      }
-    }
-
-    // Step 1b: Write data into rows startRow … startRow+numDataRows-1
-    rows.forEach((row, i) => {
-      const rowNum = startRow + i;
-      for (const [field, col] of Object.entries(cols)) {
-        if (field === 'line') {
-          if (!col || typeof col !== 'string') continue;
-          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, String(i + 1), 'number');
-          continue;
-        }
-        const val = row[field];
-        if (val === undefined || val === null || val === '') continue;
-        if (!col || typeof col !== 'string') continue;
-        if (field === 'qty' || field === 'unitPrice' || field === 'amount') {
-          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, val, 'number');
-        } else {
-          // Use sharedStrings for text values to avoid Excel corruption
-          sheetXml = setCellValue(sheetXml, ssStrings, col + rowNum, val, 'sharedStr');
-        }
-      }
-    });
-
-    // Step 2: Handle surplus pre-allocated empty rows (startRow+numDataRows … footerRow-1)
-    // For custom clients (with uploaded template): clear data only (preserve row structure & formulas)
-    // For built-in clients: remove rows and shift footer up
-    const surplusStart = startRow + numDataRows;
-    const surplusEnd = footerRow - 1;  // inclusive
-    const rowsToRemove = surplusEnd - surplusStart + 1;
-    // isCustomClient already declared above (line ~2330)
-
-    if (rowsToRemove > 0) {
-      if (isCustomClient) {
-        // Custom client: clear data cells in surplus rows but keep row structure
-        // This preserves formula references (SpellNumberToEnglish, SUM, etc.)
-        for (let r = surplusStart; r <= surplusEnd; r++) {
-          // Replace each data cell in this row with an empty cell (preserve style)
-          sheetXml = sheetXml.replace(
-            new RegExp(`(<c r="[A-Z]+${r}"[^>]*)(?: t="[^"]*")?(>)(?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*(<\/c>)`, 'g'),
-            (m, pre, gt, close) => `${pre}${gt}${close}`
-          );
-        }
-        // rowsToRemove stays > 0 for SUM formula update, but we skip row deletion/shifting
-      } else {
-        // Built-in client: remove rows and shift footer up
-        for (let r = surplusStart; r <= surplusEnd; r++) {
-          const rowPat = new RegExp(`<row[^>]*\\sr="${r}"[^>]*>[\\s\\S]*?<\/row>`, 'g');
-          sheetXml = sheetXml.replace(rowPat, '');
-        }
-
-      // Shift all rows >= footerRow up by rowsToRemove
-      // We need to renumber row r attributes and all cell references within
-      // Process from highest row number down to avoid double-replacement
-      const allRowNums = [];
-      const rowScan = /<row[^>]*\sr="(\d+)"/g;
-      let m;
-      while ((m = rowScan.exec(sheetXml)) !== null) {
-        const rn = parseInt(m[1]);
-        if (rn >= footerRow) allRowNums.push(rn);
-      }
-      allRowNums.sort((a, b) => b - a); // descending to avoid conflicts
-
-      for (const oldRow of allRowNums) {
-        const newRow = oldRow - rowsToRemove;
-        // Replace row r attribute
-        sheetXml = sheetXml.replace(
-          new RegExp(`(<row[^>]*\\s)r="${oldRow}"`, 'g'),
-          `$1r="${newRow}"`
-        );
-        // Replace all cell references in this row (e.g. A42 -> A30)
-        // Match cell refs like r="A42" or r="AB42"
-        sheetXml = sheetXml.replace(
-          new RegExp(`r="([A-Z]+)${oldRow}"`, 'g'),
-          `r="$1${newRow}"`
-        );
-      }
-
-      // Also update <dimension ref="A1:G42"> if present
-      sheetXml = sheetXml.replace(
-        /<dimension ref="([^"]+)"\/>/,
-        (match, ref) => {
-          const parts = ref.split(':');
-          if (parts.length === 2) {
-            const endRow = parseInt(parts[1].match(/\d+/)[0]);
-            if (endRow >= footerRow) {
-              const newEnd = parts[1].replace(/\d+/, String(endRow - rowsToRemove));
-              return `<dimension ref="${parts[0]}:${newEnd}"/>`;
-            }
-          }
-          return match;
-        }
-      );
-      } // end else (built-in client)
-    } // end if (rowsToRemove > 0)
-
-    // Step 3: Fix Total/SUM row formulas after row deletion
-    const lastDataRow = startRow + numDataRows - 1;
-    const newTotalRow = rowsToRemove > 0 ? (footerRow + 1 - rowsToRemove) : (footerRow + 1);
-    // Determine qty and amount column letters from cols config
-    const qtyCol = cols.qty || 'E';
-    const amtCol = cols.amount || 'G';
-
-    // [No-Flex Template] Clear stale SUM formulas (H/I/J) and write new ones at correct columns
-    if (_flexHidden) {
-      // Remove old SUM formulas referencing H/I/J columns (from original template)
-      sheetXml = sheetXml.replace(/<c[^>]*r="[A-Z]+39"[^>]*><f>SUM\([A-Z]+\d+:[A-Z]+\d+\)<\/f>.*?<\/c>/g, '');
-      sheetXml = sheetXml.replace(/<c[^>]*r="J1"[^>]*><f>SUM\([A-Z]+\d+:[A-Z]+\d+\)<\/f>.*?<\/c>/g, '');
-      // Write SUM at correct columns in row 39 (qty=D, amount=F)
-      const sumQtyCol = cols.qty || 'D';
-      const sumAmtCol = cols.amount || 'F';
-      if (sumQtyCol) {
-        sheetXml = setCellValue(sheetXml, ssStrings, sumQtyCol + '39', `=SUM(${sumQtyCol}${startRow}:${sumQtyCol}${lastDataRow})`, 'inlineStr');
-      }
-      if (sumAmtCol) {
-        sheetXml = setCellValue(sheetXml, ssStrings, sumAmtCol + '39', `=SUM(${sumAmtCol}${startRow}:${sumAmtCol}${lastDataRow})`, 'inlineStr');
-      }
-    }
-
-    // [TemplateEditor] Update SUM formulas to match potentially moved columns
-    sheetXml = updateSumFormulas(sheetXml, amtCol, qtyCol, startRow, lastDataRow);
-
-    // Update SUM(qtyCol:...) -> SUM(qtyCol{startRow}:qtyCol{lastDataRow})
-    sheetXml = sheetXml.replace(
-      new RegExp(`SUM\\(${qtyCol}\\d+:${qtyCol}\\d+\\)`, 'g'),
-      `SUM(${qtyCol}${startRow}:${qtyCol}${lastDataRow})`
-    );
-    // Update SUM(amtCol:...) -> SUM(amtCol{startRow}:amtCol{lastDataRow})
-    sheetXml = sheetXml.replace(
-      new RegExp(`SUM\\(${amtCol}\\d+:${amtCol}\\d+\\)`, 'g'),
-      `SUM(${amtCol}${startRow}:${amtCol}${lastDataRow})`
-    );
-    // Fix formula references to old total row (e.g. SpellNumberToEnglish(G98), NumberToWords(G98))
-    // Only for built-in clients where rows are actually deleted and shifted
-    if (rowsToRemove > 0 && !isCustomClient) {
-      const oldTotalRow = footerRow + 1;
-      sheetXml = sheetXml.replace(
-        new RegExp(`\\(${amtCol}${oldTotalRow}\\)`, 'g'),
-        `(${amtCol}${newTotalRow})`
-      );
-      sheetXml = sheetXml.replace(
-        new RegExp(`\\(${qtyCol}${oldTotalRow}\\)`, 'g'),
-        `(${qtyCol}${newTotalRow})`
-      );
-    }
-
-    // [TemplateEditor] Replace SpellNumber formulas with JS-computed text for all clients
-    const _totalAmtInvoice = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-    sheetXml = replaceSpellNumberFormulas(sheetXml, ssStrings, _totalAmtInvoice, amtCol);
-
-    // [No-Flex Template] Also write Says Total text near the amount column in footer
-    if (_flexHidden && amtCol) {
-      // Find row 50 (Says Total) and write English amount next to it
-      const saysTotalRow = rowsToRemove > 0 ? (50 - rowsToRemove) : 50;
-      const spellText = numberToWordsUSD(_totalAmtInvoice);
-      // Write to column adjacent to amount column (e.g. if amount=F, write to E)
-      const adjCol = String.fromCharCode(amtCol.charCodeAt(0) - 1);
-      sheetXml = setCellValue(sheetXml, ssStrings, adjCol + saysTotalRow, spellText, 'sharedStr');
-    }
-
-    // Step 3b: Fill Says Total and Payment Terms (for Master Template / custom clients)
-    const _footerOffset = docCfg._footerOffset || 0; // rows shifted due to extra data rows
-    const _totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-    const _totalQty = rows.reduce((sum, r) => sum + (parseFloat(r.qty) || 0), 0);
-
-    if (isCustomClient && docCfg.saysTotalCell) {
-      const saysTotalText = numberToWordsUSD(_totalAmt);
-      // Says Total label is in saysTotalCell (e.g. A41), value goes in saysTotalValueCell (e.g. B41)
-      // If saysTotalValueCell is defined, use it; otherwise put text in saysTotalCell
-      const targetCell = docCfg.saysTotalValueCell || docCfg.saysTotalCell;
-      const adjustedCell = targetCell.replace(/(\d+)$/, n => String(parseInt(n) + _footerOffset));
-      sheetXml = setCellValue(sheetXml, ssStrings, adjustedCell, saysTotalText, 'inlineStr');
-    }
-    if (isCustomClient && docCfg.paymentCell && custInfo && custInfo.payment) {
-      const paymentCell = docCfg.paymentCell.replace(/(\d+)$/, n => String(parseInt(n) + _footerOffset));
-      sheetXml = setCellValue(sheetXml, ssStrings, paymentCell, custInfo.payment, 'inlineStr');
-    }
-
-    // Step 3c: For Master Template - fill Total row
-    if (isCustomClient && docCfg.totalRow) {
-      const masterTotalRow = docCfg.totalRow + _footerOffset;
-      // Use updated cols after flex deletion, fallback to docCfg config
-      const amtColLetter = cols.amount || docCfg.totalAmtCol || 'G';
-      const qtyColLetter = cols.qty || docCfg.totalQtyCol || 'E';
-      sheetXml = setCellValue(sheetXml, ssStrings, amtColLetter + masterTotalRow, String(_totalAmt.toFixed(2)), 'number');
-      if (qtyColLetter !== amtColLetter) {
-        sheetXml = setCellValue(sheetXml, ssStrings, qtyColLetter + masterTotalRow, String(_totalQty), 'number');
-      }
-    }
-
-
-    // Step 4: Update sharedStrings count in ssXml
-    ssXml = ssXml.replace(
-      /(<sst[^>]*count=")(\d+)"/,
-      (m, pre, cnt) => `${pre}${ssStrings.length}"`
-    ).replace(
-      /(<sst[^>]*uniqueCount=")(\d+)"/,
-      (m, pre, cnt) => `${pre}${ssStrings.length}"`
-    );
-    // Rebuild sharedStrings XML
-    const ssBody = ssStrings.map(s => {
-      const escaped = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<si><t>${escaped}</t></si>`;
-    }).join('');
-    ssXml = ssXml.replace(/<sst([^>]*)>[\s\S]*<\/sst>/, `<sst$1>${ssBody}</sst>`);
-
-    zip.file(sheetPath, sheetXml);
-
-    // Step 5: Fill CI sheet Invoice No, Date, and DATA ROWS
-    if (cfg.ci && cfg.hasCI) {
-      const ciCfg = cfg.ci;
-      let ciXml = await zip.file(ciCfg.sheetFile).async('string');
-
-      // Fill CI Invoice No
-      const existingCiInvNo = getCellValue(ciXml, ssStrings, ciCfg.invoiceNoCell);
-      let ciInvNoFull;
-      if (existingCiInvNo && existingCiInvNo.includes('Invoice')) {
-        const hashIdx = existingCiInvNo.lastIndexOf('#');
-        if (hashIdx >= 0) {
-          const prefixUpToHash = existingCiInvNo.substring(0, hashIdx + 1);
-          const invNoPart = invoiceNo.includes('#') ? invoiceNo.split('#').slice(1).join('#') : invoiceNo;
-          ciInvNoFull = prefixUpToHash + invNoPart;
-        } else {
-          ciInvNoFull = existingCiInvNo + invoiceNo;
-        }
-      } else {
-        ciInvNoFull = '        Invoice No. : ' + invoiceNo;
-      }
-      ciXml = setCellValue(ciXml, ssStrings, ciCfg.invoiceNoCell, ciInvNoFull, 'inlineStr');
-
-      // Fill CI Date
-      const existingCiDate = getCellValue(ciXml, ssStrings, ciCfg.dateCellRef);
-      let ciDatePrefix = '';
-      if (existingCiDate && (existingCiDate.includes('Date') || existingCiDate.includes('date'))) {
-        ciDatePrefix = existingCiDate.trim().endsWith(':') ? existingCiDate.trim() + ' ' : existingCiDate.split(':')[0].trim() + ' : ';
-      }
-      ciXml = setCellValue(ciXml, ssStrings, ciCfg.dateCellRef, ciDatePrefix + invoiceDate, 'inlineStr');
-
-      // ===== FILL CI DATA ROWS =====
-      const ciStartRow = ciCfg.dataStartRow;
-      const ciFooterRow = ciCfg.footerRow || (ciStartRow + 50);
-      let ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) }; // [ExportFormat] Apply custom col overrides
-      const ciIndexMode = ciCfg.indexFormulaMode === true;
-
-      // Define col letters for use both inside and outside the ciIndexMode block
-      const ciQtyCol = ciCols.qty || 'E';
-      const ciAmtCol = ciCols.amount || 'G';
-
-      // [TemplateEditor] Apply custom labels and hide fields to CI sheet
-      ciXml = applyTemplateEditorToSheet(ciXml, ssStrings, clientKey, 'ci', ciCfg, ciCols);
-
-      if (!ciIndexMode) {
-        // Standard mode: manually write data into CI rows
-        // Step 5a-pre: Ensure all required CI data rows exist (clone template row if needed)
-        if (isCustomClient && numDataRows > 1) {
-          const ciExistingRowNums = new Set();
-          const ciRowScanPre = /<row[^>]*\sr="(\d+)"/g;
-          let ciMPre;
-          while ((ciMPre = ciRowScanPre.exec(ciXml)) !== null) {
-            ciExistingRowNums.add(parseInt(ciMPre[1]));
-          }
-          const ciTemplateRowNum = ciStartRow;
-          // Use flexible regex that matches r="N" anywhere in the row tag attributes
-          const ciTemplateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${ciTemplateRowNum}"([^>]*)>([\\s\\S]*?)<\/row>`);
-          const ciTemplateRowMatch = ciXml.match(ciTemplateRowPat);
-          if (ciTemplateRowMatch) {
-            const ciNewRowsHtml = [];
-            for (let i = 1; i < numDataRows; i++) {
-              const newRowNum = ciStartRow + i;
-              if (!ciExistingRowNums.has(newRowNum)) {
-                let newRowXml = ciTemplateRowMatch[0]
-                  .replace(new RegExp(`\\br="${ciTemplateRowNum}"`), `r="${newRowNum}"`)
-                  .replace(new RegExp(`r="([A-Z]+)${ciTemplateRowNum}"`, 'g'), `r="$1${newRowNum}"`)
-                  .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
-                    (m, attrs) => {
-                      const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
-                      return `<c${cleanAttrs}></c>`;
-                    });
-                ciNewRowsHtml.push(newRowXml);
-              }
-            }
-            if (ciNewRowsHtml.length > 0) {
-              ciXml = ciXml.replace(ciTemplateRowMatch[0], ciTemplateRowMatch[0] + ciNewRowsHtml.join(''));
-            }
-          }
-        }
-
-        // Step 5a: Write data into CI rows
-        rows.forEach((row, i) => {
-          const rowNum = ciStartRow + i;
-          for (const [field, col] of Object.entries(ciCols)) {
-            if (field === 'line') {
-              if (!col || typeof col !== 'string') continue;
-              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, String(i + 1), 'number');
-              continue;
-            }
-            const val = row[field];
-            if (val === undefined || val === null || val === '') continue;
-            if (!col || typeof col !== 'string') continue;
-            if (field === 'qty' || field === 'unitPrice' || field === 'amount') {
-              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, val, 'number');
-            } else {
-              ciXml = setCellValue(ciXml, ssStrings, col + rowNum, val, 'sharedStr');
-            }
-          }
-        });
-
-        // Step 5b: Remove surplus pre-allocated rows in CI sheet
-        const ciSurplusStart = ciStartRow + numDataRows;
-        const ciSurplusEnd = ciFooterRow - 1;
-        const ciRowsToRemove = ciSurplusEnd - ciSurplusStart + 1;
-
-        if (ciRowsToRemove > 0) {
-          // Remove surplus rows
-          for (let r = ciSurplusStart; r <= ciSurplusEnd; r++) {
-            const rowPat = new RegExp('<row[^>]*\\sr="' + r + '"[^>]*>[\\s\\S]*?<\/row>', 'g');
-            ciXml = ciXml.replace(rowPat, '');
-          }
-
-          // Shift footer rows up
-          const ciAllRowNums = [];
-          const ciRowScan = /<row[^>]*\sr="(\d+)"/g;
-          let ciM;
-          while ((ciM = ciRowScan.exec(ciXml)) !== null) {
-            const rn = parseInt(ciM[1]);
-            if (rn >= ciFooterRow) ciAllRowNums.push(rn);
-          }
-          ciAllRowNums.sort((a, b) => b - a);
-
-          for (const oldRow of ciAllRowNums) {
-            const newRow = oldRow - ciRowsToRemove;
-            ciXml = ciXml.replace(
-              new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'),
-              '$1r="' + newRow + '"'
-            );
-            ciXml = ciXml.replace(
-              new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'),
-              'r="$1' + newRow + '"'
-            );
-          }
-
-          // Update dimension
-          ciXml = ciXml.replace(
-            /<dimension ref="([^"]*)"\/>/,
-            (match, ref) => {
-              const parts = ref.split(':');
-              if (parts.length === 2) {
-                const endRowMatch = parts[1].match(/\d+/);
-                if (endRowMatch) {
-                  const endRow = parseInt(endRowMatch[0]);
-                  if (endRow >= ciFooterRow) {
-                    const newEnd = parts[1].replace(/\d+/, String(endRow - ciRowsToRemove));
-                    return '<dimension ref="' + parts[0] + ':' + newEnd + '"\/>';
-                  }
-                }
-              }
-              return match;
-            }
-          );
-        }
-
-        // Step 5c: Fix CI SUM formulas
-        const ciLastDataRow = ciStartRow + numDataRows - 1;
-        const ciNewTotalRow = ciRowsToRemove > 0 ? (ciFooterRow + 1 - ciRowsToRemove) : (ciFooterRow + 1);
-
-        // Update SUM(qtyCol:...) -> SUM(qtyCol{ciStartRow}:qtyCol{ciLastDataRow})
-        ciXml = ciXml.replace(
-          new RegExp('SUM\\(' + ciQtyCol + '\\d+:' + ciQtyCol + '\\d+\\)', 'g'),
-          'SUM(' + ciQtyCol + ciStartRow + ':' + ciQtyCol + ciLastDataRow + ')'
-        );
-        // Update SUM(amtCol:...) -> SUM(amtCol{ciStartRow}:amtCol{ciLastDataRow})
-        ciXml = ciXml.replace(
-          new RegExp('SUM\\(' + ciAmtCol + '\\d+:' + ciAmtCol + '\\d+\\)', 'g'),
-          'SUM(' + ciAmtCol + ciStartRow + ':' + ciAmtCol + ciLastDataRow + ')'
-        );
-
-        // Fix formula references to old total row
-        if (ciRowsToRemove > 0) {
-          const ciOldTotalRow = ciFooterRow + 1;
-          ciXml = ciXml.replace(
-            new RegExp('\\(' + ciAmtCol + ciOldTotalRow + '\\)', 'g'),
-            '(' + ciAmtCol + ciNewTotalRow + ')'
-          );
-          ciXml = ciXml.replace(
-            new RegExp('\\(' + ciQtyCol + ciOldTotalRow + '\\)', 'g'),
-            '(' + ciQtyCol + ciNewTotalRow + ')'
-          );
-        }
-      }
-      // In indexFormulaMode: CI data rows use INDEX formulas from Invoice sheet
-
-      // [TemplateEditor] Update CI SUM formulas to match potentially moved columns
-      ciXml = updateSumFormulas(ciXml, ciAmtCol, ciQtyCol, ciStartRow, ciStartRow + numDataRows - 1);
-
-      // [TemplateEditor] Replace SpellNumber formulas with JS-computed text for all clients
-      const _ciTotalAmtPre = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-      ciXml = replaceSpellNumberFormulas(ciXml, ssStrings, _ciTotalAmtPre, ciAmtCol);
-      // No need to fill data rows - they auto-update from Invoice sheet
-      // Only Invoice No, Date, and customer info need to be filled (done above/below)
-
-      // Step 5c2: Fill CI Says Total and Total row (for Master Template)
-      const _ciTotalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-      const _ciTotalQty = rows.reduce((sum, r) => sum + (parseFloat(r.qty) || 0), 0);
-      const _ciFooterOffset = ciCfg._footerOffset || 0;
-      if (isCustomClient && ciCfg.saysTotalCell) {
-        const saysTotalText = numberToWordsUSD(_ciTotalAmt);
-        const targetCell = ciCfg.saysTotalValueCell || ciCfg.saysTotalCell;
-        const adjustedCell = targetCell.replace(/(\d+)$/, n => String(parseInt(n) + _ciFooterOffset));
-        ciXml = setCellValue(ciXml, ssStrings, adjustedCell, saysTotalText, 'inlineStr');
-      }
-      // Fill CI Total cell (E60 in Master Template)
-      if (isCustomClient && ciCfg.totalRow) {
-        const ciTotalRow = ciCfg.totalRow + _ciFooterOffset;
-        const ciAmtColLetter2 = ciCols.amount || ciCfg.totalAmtCol || 'G'; // ciCols.amount is updated after flex deletion
-        const ciQtyColLetter2 = ciCfg.totalQtyCol; // null means don't fill qty
-        ciXml = setCellValue(ciXml, ssStrings, ciAmtColLetter2 + ciTotalRow, String(_ciTotalAmt.toFixed(2)), 'number');
-        if (ciQtyColLetter2 && ciQtyColLetter2 !== ciAmtColLetter2) {
-          ciXml = setCellValue(ciXml, ssStrings, ciQtyColLetter2 + ciTotalRow, String(_ciTotalQty), 'number');
-        }
-      }
-
-      // Step 5d: Apply customer info to CI sheet
-      if (custInfo) {
-        ciXml = applyCustomerInfo(ciXml, ssStrings, clientKey, custInfo, true);
-      }
-
-      // Step 5e: Apply CI-specific Ship To cells (from ciConfig.shipCells)
-      // These are the Ship To address cells in the CI sheet (different from Invoice Bill To)
-      if (isCustomClient && custInfo) {
-        const ccCode = clientKey.replace('custom_', '');
-        const ccObj = customClients.find(c => c.code === ccCode);
-        const ciShipCells = ccObj && ccObj.templateConfig && ccObj.templateConfig.ci && ccObj.templateConfig.ci.shipCells;
-        if (ciShipCells && ciShipCells.length > 0) {
-          for (const [cell, field] of ciShipCells) {
-            let val;
-            if (field === 'attn_prefixed') {
-              val = custInfo.attn ? 'Attn : ' + custInfo.attn : '';
-            } else {
-              val = custInfo[field] || '';
-            }
-            if (val) ciXml = setCellValue(ciXml, ssStrings, cell, val, 'inlineStr');
-          }
-        }
-      }
-
-
-      // ── CI Footer: Product Info, HS Code, Material, Made in China ──
-      const _ciSettings = getSettings();
-      const ciProdRow = ciCfg.footerRow ? ciCfg.footerRow + 3 : 75;
-      if (ciProdRow) {
-        const ciProdLabel = 'A' + ciProdRow;
-        ciXml = setCellValue(ciXml, ssStrings, ciProdLabel, 'PRODUCT NAME : ' + (_ciSettings.productName || 'GOLF SHAFT').toUpperCase(), 'sharedStr');
-        ciXml = setCellValue(ciXml, ssStrings, 'A' + (ciProdRow + 1), 'HS CODE#' + (_ciSettings.hsCode || '95063900'), 'sharedStr');
-        ciXml = setCellValue(ciXml, ssStrings, 'A' + (ciProdRow + 2), 'MATERIAL : ' + (_ciSettings.material || 'CARBON FIBER').toUpperCase(), 'sharedStr');
-        ciXml = setCellValue(ciXml, ssStrings, 'A' + (ciProdRow + 3), 'MADE IN CHINA', 'sharedStr');
-      }
-      zip.file(ciCfg.sheetFile, ciXml);
-    }
-
-    // Step 5b: Fill PL (Packing List) sheet - dynamic row handling like CI
-    if (cfg.pl && cfg.hasPL) {
-      const plCfg = cfg.pl;
-      const plSheetFile = plCfg.sheetFile || 'xl/worksheets/sheet3.xml';
-      const plZipEntry = zip.file(plSheetFile);
-      if (plZipEntry) {
-        let plXml = await plZipEntry.async('string');
-        const plStartRow = plCfg.dataStartRow || 19;
-        const plFooterRow = plCfg.footerRow || 30;
-        const plCols = plCfg.cols || { po:'A', itemCode:'B', qty:'F' };
-        const plDataRows = rows.filter(r => r && r.itemCode && r.itemCode.trim());
-        const plNumRows = plDataRows.length;
-        const plTemplateDataRows = plFooterRow - plStartRow; // rows in template (e.g. 30-19=11)
-
-        // ── Step 5b-pre: Clone template row if more data rows needed ──
-        if (plNumRows > 1) {
-          const plExistingRowNums = new Set();
-          const plRowScanPre = /<row[^>]*\sr="(\d+)"/g;
-          let plMPre;
-          while ((plMPre = plRowScanPre.exec(plXml)) !== null) {
-            plExistingRowNums.add(parseInt(plMPre[1]));
-          }
-          const plTemplateRowPat = new RegExp(`<row\b([^>]*?)\br="${plStartRow}"([^>]*)>([\s\S]*?)<\/row>`);
-          const plTemplateRowMatch = plXml.match(plTemplateRowPat);
-          if (plTemplateRowMatch) {
-            const plTemplateRowFull = plTemplateRowMatch[0];
-            const plRowsToInsert = [];
-            for (let i = 1; i < plNumRows; i++) {
-              const newRowNum = plStartRow + i;
-              if (!plExistingRowNums.has(newRowNum)) {
-                // Clone template row with new row number
-                let newRow = plTemplateRowFull
-                  .replace(new RegExp('(\s)r="' + plStartRow + '"'), '$1r="' + newRowNum + '"')
-                  .replace(new RegExp('r="([A-Z]+)' + plStartRow + '"', 'g'), 'r="$1' + newRowNum + '"');
-                // Clear values in cloned row
-                newRow = newRow.replace(/<v>[^<]*<\/v>/g, '<v></v>');
-                newRow = newRow.replace(/<t>[^<]*<\/t>/g, '<t></t>');
-                plRowsToInsert.push(newRow);
-              }
-            }
-            if (plRowsToInsert.length > 0) {
-              // Shift footer rows down
-              const plRowsAdded = plRowsToInsert.length;
-              const plAllRowNums = [];
-              const plRowScan2 = /<row[^>]*\sr="(\d+)"/g;
-              let plM2;
-              while ((plM2 = plRowScan2.exec(plXml)) !== null) {
-                const rn = parseInt(plM2[1]);
-                if (rn >= plFooterRow) plAllRowNums.push(rn);
-              }
-              plAllRowNums.sort((a, b) => b - a);
-              for (const oldRow of plAllRowNums) {
-                const newRow = oldRow + plRowsAdded;
-                plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
-                plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
-              }
-              // Insert new rows before the (shifted) footer row
-              const newFooterRow = plFooterRow + plRowsAdded;
-              const plInsertAnchor = new RegExp('(<row[^>]*\sr="' + newFooterRow + '"[^>]*>[\s\S]*?<\/row>)');
-              plXml = plXml.replace(plInsertAnchor, plRowsToInsert.join('') + '$1');
-            }
-          }
-        }
-
-        // ── Step 5b-shrink: Remove excess template rows if fewer data rows than template ──
-        const plActualFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows);
-        if (plNumRows < plTemplateDataRows) {
-          const plRowsToRemove = plTemplateDataRows - plNumRows;
-          // Remove rows from plStartRow + plNumRows to plFooterRow - 1
-          for (let r = plStartRow + plNumRows; r < plFooterRow; r++) {
-            const plRemovePat = new RegExp('<row[^>]*\sr="' + r + '"[^>]*>[\s\S]*?<\/row>');
-            plXml = plXml.replace(plRemovePat, '');
-          }
-          // Shift footer rows up
-          const plAllRowNums2 = [];
-          const plRowScan3 = /<row[^>]*\sr="(\d+)"/g;
-          let plM3;
-          while ((plM3 = plRowScan3.exec(plXml)) !== null) {
-            const rn = parseInt(plM3[1]);
-            if (rn >= plFooterRow) plAllRowNums2.push(rn);
-          }
-          plAllRowNums2.sort((a, b) => b - a);
-          for (const oldRow of plAllRowNums2) {
-            const newRow = oldRow - plRowsToRemove;
-            plXml = plXml.replace(new RegExp('(<row[^>]*\s)r="' + oldRow + '"', 'g'), '$1r="' + newRow + '"');
-            plXml = plXml.replace(new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'), 'r="$1' + newRow + '"');
-          }
-        }
-
-        // ── Step 5b-fill: Fill Invoice No, Date ──
-        if (plCfg.invoiceNoCell) {
-          plXml = setCellValue(plXml, ssStrings, plCfg.invoiceNoCell, invoiceNo, 'inlineStr');
-        }
-        if (plCfg.dateCellRef) {
-          const plDateStr = document.getElementById('shipmentDate')?.value || invoiceDate || '';
-          if (plDateStr) plXml = setCellValue(plXml, ssStrings, plCfg.dateCellRef, plDateStr, 'inlineStr');
-        }
-
-        // ── Step 5b-data: Fill data rows (PO#, Item Code, Total Qty) ──
-        const plFinalFooterRow = plFooterRow + Math.max(0, plNumRows - plTemplateDataRows) - Math.max(0, plTemplateDataRows - plNumRows);
-        plDataRows.forEach((r, i) => {
-          const rowNum = plStartRow + i;
-          if (plCols.po)       plXml = setCellValue(plXml, ssStrings, plCols.po + rowNum, r.po || '', 'inlineStr');
-          if (plCols.itemCode) plXml = setCellValue(plXml, ssStrings, plCols.itemCode + rowNum, r.itemCode || '', 'inlineStr');
-          if (plCols.qty)      plXml = setCellValue(plXml, ssStrings, plCols.qty + rowNum, String(parseFloat(r.qty) || 0), 'number');
-        });
-
-        // ── Step 5b-total: Fill total qty ──
-        if (plCfg.totalQtyCol) {
-          const plTotalQty = plDataRows.reduce((s, r) => s + (parseFloat(r.qty) || 0), 0);
-          const plComputedTotalRow = plFinalFooterRow;
-          plXml = setCellValue(plXml, ssStrings, plCfg.totalQtyCol + plComputedTotalRow, String(plTotalQty), 'number');
-          // Update SUM formula in total row
-          plXml = plXml.replace(
-            new RegExp('SUM\(' + plCols.qty + '\d+:' + plCols.qty + '\d+\)', 'g'),
-            'SUM(' + plCols.qty + plStartRow + ':' + plCols.qty + (plStartRow + plNumRows - 1) + ')'
-          );
-        }
-
-        zip.file(plSheetFile, plXml);
-      }
-    }
-    // Step 6: Clean workbook.xml (keep Invoice, CI, PL; remove other sheets)
-    let wbXml = await zip.file('xl/workbook.xml').async('string');
-    let wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    // Remove non-invoice/CI/PL sheets from workbook.xml
-    const keepSheets = ['invoice', 'ci'];
-    if (cfg.pl && cfg.hasPL) keepSheets.push('pl');
-    const sheetsToRemove = [];
-    const sheetMatches = [...wbXml.matchAll(/<sheet[^>]+name="([^"]+)"[^>]+r:id="([^"]+)"[^>]*\/>/g)];
-    for (const m of sheetMatches) {
-      const sheetName = m[1].toLowerCase();
-      const rId = m[2];
-      if (!keepSheets.includes(sheetName)) {
-        sheetsToRemove.push(rId);
-        wbXml = wbXml.replace(m[0], '');
-      }
-    }
-    // Remove from rels
-    for (const rId of sheetsToRemove) {
-      wbRels = wbRels.replace(new RegExp(`<Relationship[^>]*Id="${rId}"[^>]*/>`), '');
-    }
-    // Remove definedNames that reference removed sheets (e.g. PGUS!$1:$7)
-    wbXml = wbXml.replace(/<definedName[^>]*>[^<]*(?:PGUS)![^<]*<\/definedName>/g, '');
-    zip.file('xl/workbook.xml', wbXml);
-    zip.file('xl/_rels/workbook.xml.rels', wbRels);
-    // Remove orphaned sheet XML files (sheet4 and above only; keep sheet3 for PL)
-    const allZipFiles = Object.keys(zip.files);
-    const removedFiles = [];
-    const minOrphanSheet = (cfg.pl && cfg.hasPL) ? 4 : 3;
-    for (const f of allZipFiles) {
-      const orphanPattern = new RegExp(`xl/worksheets/sheet[${minOrphanSheet}-9]\.xml$`);
-      const orphanRelsPattern = new RegExp(`xl/worksheets/_rels/sheet[${minOrphanSheet}-9]\.xml\.rels$`);
-      if (orphanPattern.test(f) || orphanRelsPattern.test(f)) {
-        zip.remove(f);
-        removedFiles.push(f);
-      }
-    }
-
-    // Fix [Content_Types].xml: remove Override entries for deleted sheets
-    let ctXml = await zip.file('[Content_Types].xml').async('string');
-    for (const f of removedFiles) {
-      // f is like 'xl/worksheets/sheet3.xml', CT uses '/xl/worksheets/sheet3.xml'
-      const partName = ('/' + f).replace(/[.*+?^${}()|[\]\\]/g, '\$&');
-      ctXml = ctXml.replace(new RegExp(`<Override[^>]*PartName="${partName}"[^>]*/>`, 'g'), '');
-    }
-    // Remove drawing overrides beyond what we keep (2 sheets = drawing1/2; 3 sheets = drawing1/2/3)
-    const maxDrawing = (cfg.pl && cfg.hasPL) ? 3 : 2;
-    ctXml = ctXml.replace(
-      new RegExp(`<Override[^>]*PartName="/xl/drawings/drawing[${maxDrawing+1}-9]\.xml"[^>]*/>`, 'g'), ''
-    );
-    zip.file('[Content_Types].xml', ctXml);
-
-    // Remove calcChain.xml entirely (Excel will recalculate on open, avoids stale sheet refs)
-    if (zip.file('xl/calcChain.xml')) {
-      zip.remove('xl/calcChain.xml');
-      // Also remove calcChain from workbook.xml.rels
-      wbRels = wbRels.replace(/<Relationship[^>]*calcChain[^>]*\/>/g, '');
-      zip.file('xl/_rels/workbook.xml.rels', wbRels);
-      // Remove calcChain Override from Content_Types.xml
-      ctXml = ctXml.replace(/<Override[^>]*calcChain[^>]*\/>/g, '');
-      zip.file('[Content_Types].xml', ctXml);
-    }
-
+    const cfg = CLIENT_CONFIGS[clientKey];
+    const docCfg = cfg[state.docType];
+    if (!docCfg) { toast('No ' + state.docType.toUpperCase() + ' config found for this client.', 'error'); return; }
+
+    const rows = collectRows();
+    if (!rows || rows.length === 0) { toast('No line items to export.', 'error'); return; }
+
+    const invoiceNo = document.getElementById('invoiceNo')?.value || '';
+    const invoiceDate = document.getElementById('invoiceDate')?.value || '';
+
+    // Build shared strings from all texts
+    const ssTexts = buildAllSharedStrings(clientKey, rows, state.docType);
+    const ssXml = buildSharedStringsXml(ssTexts);
+
+    // Build sheets using template fragments
+    const sheet1Xml = buildInvoiceSheet(rows, ssTexts);
+    const sheet2Xml = buildCISheet(rows, ssTexts);
+
+    // Assemble the xlsx
+    const zip = new JSZip();
+
+    // Static parts from template fragments
+    zip.file('_rels/.rels', atob(XLSX_FRAGMENTS.package_rels));
+    zip.file('[Content_Types].xml', atob(XLSX_FRAGMENTS.content_types));
+    zip.file('xl/workbook.xml', atob(XLSX_FRAGMENTS.workbook));
+    zip.file('xl/_rels/workbook.xml.rels', atob(XLSX_FRAGMENTS.workbook_rels));
+    zip.file('xl/styles.xml', atob(XLSX_FRAGMENTS.styles));
+    zip.file('xl/theme/theme1.xml', atob(XLSX_FRAGMENTS.theme));
     zip.file('xl/sharedStrings.xml', ssXml);
+    zip.file('xl/media/image1.jpeg', atob(XLSX_FRAGMENTS.img1), { binary: true });
+    zip.file('xl/media/image2.jpeg', atob(XLSX_FRAGMENTS.img2), { binary: true });
+    zip.file('xl/drawings/drawing1.xml', atob(XLSX_FRAGMENTS.drawing1));
+    zip.file('xl/drawings/drawing2.xml', atob(XLSX_FRAGMENTS.drawing2));
+    zip.file('xl/drawings/_rels/drawing1.xml.rels', atob(XLSX_FRAGMENTS.drawing1_rels));
+    zip.file('xl/drawings/_rels/drawing2.xml.rels', atob(XLSX_FRAGMENTS.drawing2_rels));
+    zip.file('xl/worksheets/_rels/sheet1.xml.rels', atob(XLSX_FRAGMENTS.s1_drel));
+    zip.file('xl/worksheets/_rels/sheet2.xml.rels', atob(XLSX_FRAGMENTS.s2_drel));
 
-    // Generate file (always output as Invoice+CI combined)
+    // Dynamic sheets
+    zip.file('xl/worksheets/sheet1.xml', sheet1Xml);
+    zip.file('xl/worksheets/sheet2.xml', sheet2Xml);
+
+    // Generate blob
     const blob = await zip.generateAsync({
       type: 'blob',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       compression: 'DEFLATE'
     });
 
-    const safeInv = invoiceNo.replace(/[\/\\#\s]/g, '_');
-    const defaultName = `${cfg.code}_INVOICE_CI_PL_${safeInv}`;
+    const safeInv = invoiceNo.replace(/[/\\#\s]/g, '_');
+    const defaultName = cfg.code + '_INVOICE_CI_PL_' + safeInv;
     const userFileName = await promptFileName(defaultName, 'xlsx');
-    if (userFileName === null) return; // user cancelled
+    if (userFileName === null) return;
     const filename = userFileName + '.xlsx';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -4810,221 +3963,483 @@ async function downloadExcel() {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-
-    // Save to history
-    const _hShipDate = document.getElementById('shipmentDate')?.value || '';
-    const _hLinkedPO = document.getElementById('invoiceLinkedPO')?.value?.trim() || '';
-    const _hLines = rows.filter(r => r && r.itemCode && r.itemCode.trim()).map(r => ({
-      po: r.po || '',             // per-row PO number (column A) - needed for Order Status sync
-      itemCode: r.itemCode || '',
-      flex: r.flex || '',
-      nfItem: r.nfItem || '',
-      qty: parseFloat(r.qty) || 0,
-      unitPrice: parseFloat(r.unitPrice) || 0,
-      amount: parseFloat(r.amount) || 0
-    }));
-    const _hHeaderPO = document.getElementById('headerPO')?.value?.trim() || '';
-    const _hCartonDescEl = document.getElementById('cartonDesc');
-    const _hCartonDesc = _hCartonDescEl ? _hCartonDescEl.value.trim() : '';
-    // If editing existing record, update it; otherwise add new
-    if (state.editingHistoryIdx !== null) {
-      // Update existing history entry in-place
-      const _hist = loadHistory();
-      const _he = _hist[state.editingHistoryIdx];
-      if (_he) {
-        _he.invoiceNo = invoiceNo;
-        _he.invoiceDate = invoiceDate;
-        _he.shipmentDate = _hShipDate;
-        _he.linkedPO = _hLinkedPO;
-        _he.headerPO = _hHeaderPO;
-        _he.cartonDesc = _hCartonDesc;
-        _he.lines = _hLines;
-        _he.totalQty = (() => { const el = document.getElementById('totalQty'); return parseInt(el.tagName==='INPUT' ? el.value : el.textContent) || 0; })();
-        _he.totalAmount = (() => { const el = document.getElementById('totalAmount'); return el.tagName==='INPUT' ? el.value : el.textContent; })();
-        _he.filename = filename;
-        _he.lastEdited = new Date().toISOString();
-        saveHistory(_hist);
-      }
-      state.editingHistoryIdx = null;
-      _updateStep5UI();
-    } else {
-      addHistoryEntry({
-        date: new Date().toISOString(),
-        client: cfg.label,
-        clientKey: state.selectedClient,
-        docType: state.docType.toUpperCase(),
-        invoiceNo,
-        invoiceDate,
-        shipmentDate: _hShipDate,
-        linkedPO: _hLinkedPO,
-        headerPO: _hHeaderPO,
-        cartonDesc: _hCartonDesc,
-        lines: _hLines,
-        totalQty: (() => { const el = document.getElementById('totalQty'); return parseInt(el.tagName==='INPUT' ? el.value : el.textContent) || 0; })(),
-        totalAmount: (() => { const el = document.getElementById('totalAmount'); return el.tagName==='INPUT' ? el.value : el.textContent; })(),
-        filename
-      });
-    }
-
-    // Save to Cashflow database
-    const cfClientKey = state.selectedClient;
-    let cfInfo;
-    if (cfClientKey && cfClientKey.startsWith('custom_')) {
-      const ccCode = cfClientKey.replace('custom_', '');
-      cfInfo = customClients.find(c => c.code === ccCode) || {};
-    } else {
-      cfInfo = customerInfo[cfClientKey] || DEFAULT_CUSTOMER_INFO[cfClientKey] || {};
-    }
-    const cfPaymentDays = parseInt(cfInfo.paymentDays) || 45;
-    const cfInvoiceDateObj = new Date(invoiceDate);
-    const cfPaymentDateObj = new Date(cfInvoiceDateObj);
-    cfPaymentDateObj.setDate(cfPaymentDateObj.getDate() + cfPaymentDays);
-    const cfPaymentDate = cfPaymentDateObj.toISOString().split('T')[0];
-    // Use `rows` (already read from DOM by collectRows()) instead of state.rows (may be stale)
-    const cfLines = rows
-      .filter(r => r && r.itemCode && r.itemCode.trim())
-      .map(r => ({
-        po: r.po || '',           // per-row PO number (column A)
-        itemCode: r.itemCode || '',
-        flex: r.flex || '',
-        nfItem: r.nfItem || '',
-        qty: parseFloat(r.qty) || 0,
-        unitPrice: parseFloat(r.unitPrice) || 0,
-        amount: parseFloat(r.amount) || 0
-      }));
-    const cfTotalAmt = cfLines.reduce((s, r) => s + r.amount, 0);
-    // Read shipment date and linked PO before saving records
-    const linkedPONo = document.getElementById('invoiceLinkedPO')?.value?.trim() || '';
-    // Normalize shipmentDate to YYYY-MM-DD (handle both YYYY/MM/DD and YYYY-MM-DD)
-    const rawShipDate = document.getElementById('shipmentDate')?.value || invoiceDate || '';
-    const cfShipmentDate = rawShipDate.replace(/\//g, '-');
-    const invoiceShipmentDate = cfShipmentDate;
-    const isPgClient = cfClientKey === 'PGCanada' || cfClientKey === 'PGUS';
-    addCashflowRecord({
-      clientKey: cfClientKey,
-      clientLabel: cfg.label,
-      invoiceNo,
-      invoiceDate,
-      shipmentDate: cfShipmentDate,
-      paymentDays: cfPaymentDays,
-      paymentDate: cfPaymentDate,
-      totalQty: cfLines.reduce((s, r) => s + r.qty, 0),
-      totalAmount: cfTotalAmt,
-      lines: cfLines,
-      linkedPO: linkedPONo,
-      recordedAt: new Date().toISOString()
-    });
-
-    // ── Update Order Status: support multi-PO invoices ──────────────────────────
-    // Each cfLine now carries its own .po field (from column A of the invoice table).
-    // Group lines by their per-row PO number; fall back to linkedPONo (header field)
-    // if the row-level PO is blank.
-    console.log('[OS Update] cfClientKey:', cfClientKey, '| linkedPONo:', linkedPONo, '| invoiceShipmentDate:', invoiceShipmentDate, '| cfLines count:', cfLines.length);
-    console.log('[OS Update] cfLines sample:', JSON.stringify(cfLines.slice(0,2)));
-    console.log('[OS Update] cfLines count:', cfLines.length, '| sample:', cfLines.slice(0,2));
-    {
-      const allOrders = getClientOrders(cfClientKey);
-      console.log('[OS Update] allOrders count for', cfClientKey, ':', allOrders.length);
-      let osUpdatedCount = 0;
-
-      cfLines.forEach(line => {
-        // Determine which PO this line belongs to (per-row PO takes priority)
-        const linePO = (line.po || '').trim();
-        if (!linePO) {
-          console.log('[OS Update] Skipping line - no PO number in row:', line.itemCode);
-          return; // skip lines with no per-row PO
-        }
-
-        // Find all orders for this PO
-        const poOrders = allOrders.filter(o => String(o.poNo || '').trim() === String(linePO).trim());
-        if (poOrders.length === 0) {
-          console.log('[OS Update] No orders found for PO:', linePO);
-          return;
-        }
-
-        const lcItem = (line.itemCode || '').toLowerCase().trim();
-        const lcNf   = (line.nfItem   || '').toLowerCase().trim();
-
-        // Match priority:
-        // 1) exact PG itemCode match
-        // 2) exact NF item code match (nfSpec or nfItem field)
-        // 3) first order in the PO as fallback
-        const matchedOrder =
-          poOrders.find(o => (o.itemCode || '').toLowerCase().trim() === lcItem) ||
-          poOrders.find(o => (o.nfSpec   || '').toLowerCase().trim() === lcNf)   ||
-          poOrders.find(o => (o.nfItem   || '').toLowerCase().trim() === lcNf)   ||
-          poOrders[0];
-
-        if (!matchedOrder) return;
-
-        if (!matchedOrder.shipments) matchedOrder.shipments = [];
-
-        // Avoid double-recording the same invoice line
-        const alreadyRecorded = matchedOrder.shipments.some(s =>
-          (s.invoiceNo === invoiceNo || s.tracking === invoiceNo) &&
-          s.qty === line.qty
-        );
-        let _shipStatus = 'Planned';
-        if (!alreadyRecorded) {
-          // Determine status: Planned if shipDate is in the future, Shipped if today or past
-          const _shipDateStr = invoiceShipmentDate || invoiceDate;
-          const _today = new Date(); _today.setHours(0, 0, 0, 0);
-          const _shipD  = _shipDateStr ? new Date(_shipDateStr) : null;
-          _shipStatus = (_shipD && _shipD <= _today) ? 'Shipped' : 'Planned';
-          matchedOrder.shipments.push({
-            shipDate: _shipDateStr,
-            qty: line.qty,
-            invoiceNo: invoiceNo,
-            status: _shipStatus,
-            source: 'invoice'
-          });
-          osUpdatedCount++;
-        }
-
-        // Update plannedShipDate
-        if (invoiceShipmentDate) matchedOrder.plannedShipDate = invoiceShipmentDate;
-
-        // Recalculate poStatus: only count confirmed 'Shipped' records
-        const totalShipped = matchedOrder.shipments
-          .filter(sh => sh.status === 'Shipped')
-          .reduce((s, sh) => s + (sh.qty || 0), 0);
-        if (totalShipped >= (matchedOrder.qty || 0) && totalShipped > 0) {
-          matchedOrder.poStatus = 'complete';
-        } else if (totalShipped > 0) {
-          matchedOrder.poStatus = 'partial';
-        } else {
-          matchedOrder.poStatus = matchedOrder.poStatus || 'pending';
-        }
-
-        // Update stockOnHand only for confirmed shipped qty
-        // (Planned shipments don't reduce stock yet)
-        if (_shipStatus === 'Shipped') {
-          matchedOrder.stockOnHand = Math.max(0, (matchedOrder.stockOnHand || 0) - line.qty);
-        }
-      });
-
-      if (cfLines.some(l => (l.po || '').trim())) {
-        saveClientOrders(cfClientKey, allOrders);
-        // Sync to Shipment Planner
-        _syncOrderShipmentsToPlanner(cfClientKey, allOrders[cfClientKey] || []);
-        // Re-render Order Status if currently on that tab
-        if (document.getElementById('tab-orderstatus')?.classList.contains('active')) {
-          renderOrderStatus();
-        }
-        if (osUpdatedCount > 0) {
-          const updatedPOs = [...new Set(cfLines.map(l => (l.po || '').trim()).filter(Boolean))];
-          toast(`✓ Order Status updated: ${osUpdatedCount} line(s) across PO(s) ${updatedPOs.join(', ')}`, 'success');
-          console.log('[OS Update] Updated', osUpdatedCount, 'lines across POs:', updatedPOs);
-        }
-      }
-    }
-        toast(`✓ Downloaded: ${filename}`, 'success');
-
-  } catch(err) {
+    toast('\u2705 Downloaded ' + filename, 'success');
+  } catch (err) {
     console.error(err);
     toast('Error generating file: ' + err.message, 'error');
+  } finally {
+    btn.textContent = '\u2b07 Download Invoice + CI (.xlsx)';
+    btn.disabled = false;
   }
 }
+
+/**
+ * Build all shared strings needed for the invoice
+ */
+function buildAllSharedStrings(clientKey, rows, docType) {
+  const s = getSettings();
+  const cfg = CLIENT_CONFIGS[clientKey];
+  const texts = [];
+  const textMap = {}; // text -> index
+
+  function add(text) {
+    const t = String(text || '');
+    if (!(t in textMap)) {
+      textMap[t] = texts.length;
+      texts.push(t);
+    }
+    return textMap[t];
+  }
+
+  // Company info
+  add(s.companyName || 'Neo-Fiber Industrial Co., Ltd.');
+  add(s.companyAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan');
+  add(s.companyTel || '+886-2-25016266');
+  add(s.companyFax || '+886-2-25016892');
+
+  // Invoice info
+  const invNo = document.getElementById('invoiceNo')?.value || '';
+  const invDate = document.getElementById('invoiceDate')?.value || '';
+  const poNo = document.getElementById('poNo')?.value || '';
+  add(invNo);
+  add(invDate);
+  add(poNo);
+
+  // Client info (Bill To / Ship To)
+  add(cfg.label || '');
+  add(cfg.shipTo || cfg.label || '');
+
+  // Column headers
+  add('PO No.');
+  add('PG item no.');
+  add('Flex');
+  add('NF item no.');
+  add('Qty (pcs)');
+  add('Unit price');
+  add('Amount');
+
+  // Data rows
+  for (const row of rows) {
+    add(row.po);
+    add(row.itemCode);
+    add(row.flex);
+    add(row.nfItem);
+  }
+
+  // Footer
+  add('Made in China');
+  add('Subtotal');
+  add('Says Total:');
+
+  // Says Total English
+  const totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+  const spellText = numberToWordsUSD(totalAmt);
+  add(spellText);
+
+  // Product info
+  add('Product name');
+  add('HS Code');
+  add('Material');
+  add(s.productName || 'Golf Shaft');
+  add(s.hsCode || '95063900');
+  add(s.material || 'Carbon Fiber');
+
+  // Payment
+  add('Payment');
+  add(s.paymentTerms || 'By O/A 45 days');
+
+  // Bank info
+  add('Bank');
+  add(s.bankName || 'DBS Bank (Taiwan) Ltd.');
+  add(s.bankAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan');
+  add('A/C:');
+  add(s.bankAccount || '7850014299');
+  add('Swift:');
+  add(s.bankSwift || 'DBSSTWTB');
+
+  // Beneficiary
+  add('Beneficiary:');
+  add(s.beneficiaryName || 'NEO-FIBER INDUSTRIAL CO., LTD.');
+  add(s.beneficiaryAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan');
+
+  // Signature
+  add('For and on behalf of');
+  add('________________________');
+  add(s.signatoryName || 'Annie Yu');
+
+  return texts;
+}
+
+/**
+ * Build sharedStrings.xml
+ */
+function buildSharedStringsXml(texts) {
+  let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  xml += '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+  xml += ' count="' + texts.length + '" uniqueCount="' + texts.length + '">';
+  for (const text of texts) {
+    const escaped = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    xml += '<si><t>' + escaped + '</t></si>';
+  }
+  xml += '</sst>';
+  return xml;
+}
+
+/**
+ * Build Invoice Sheet (Sheet1) XML using template fragments
+ */
+function buildInvoiceSheet(rows, ssTexts) {
+  const s = getSettings();
+  const textMap = {};
+  ssTexts.forEach((t, i) => textMap[t] = i);
+  function si(text) { return textMap[text] !== undefined ? textMap[text] : 0; }
+
+  let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+  xml += ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
+  xml += '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>';
+  xml += '<sheetViews><sheetView tabSelected="1" workbookViewId="0"/></sheetViews>';
+  xml += '<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>';
+
+  // Column widths
+  xml += '<cols>';
+  xml += '<col min="1" max="1" width="21.5" customWidth="1"/>'; // A
+  xml += '<col min="2" max="2" width="21.5" customWidth="1"/>'; // B
+  xml += '<col min="3" max="3" width="6.5" customWidth="1"/>';  // C
+  xml += '<col min="4" max="4" width="19.5" customWidth="1"/>'; // D
+  xml += '<col min="5" max="5" width="12" customWidth="1"/>';   // E
+  xml += '<col min="6" max="6" width="12" customWidth="1"/>';   // F
+  xml += '<col min="7" max="7" width="12.5" customWidth="1"/>'; // G
+  xml += '</cols>';
+
+  xml += '<sheetData>';
+
+  // === HEADER (Rows 1-19) ===
+  // Row 1: Company name
+  xml += '<row r="1" spans="1:7" ht="30.75" customHeight="1">';
+  xml += '<c r="A1" t="s"><v>' + si(s.companyName || 'Neo-Fiber Industrial Co., Ltd.') + '</v></c>';
+  xml += '</row>';
+
+  // Row 2-6: (empty spacer rows)
+  for (let r = 2; r <= 6; r++) {
+    xml += '<row r="' + r + '" spans="1:7"/>';
+  }
+
+  // Row 7: BILL TO / SHIP TO headers
+  xml += '<row r="7" spans="1:7">';
+  xml += '<c r="A7" t="s"><v>' + si('BILL TO:') + '</v></c>';
+  xml += '<c r="D7" t="s"><v>' + si('SHIP TO:') + '</v></c>';
+  xml += '</row>';
+
+  // Row 8-9: Client info
+  const clientKey = state.selectedClient;
+  const cfg = CLIENT_CONFIGS[clientKey];
+  xml += '<row r="8" spans="1:7">';
+  xml += '<c r="A8" t="s"><v>' + si(cfg?.label || '') + '</v></c>';
+  xml += '<c r="D8" t="s"><v>' + si(cfg?.shipTo || cfg?.label || '') + '</v></c>';
+  xml += '</row>';
+
+  // Row 10-11: Addresses (simplified)
+  xml += '<row r="10" spans="1:7"/>';
+  xml += '<row r="11" spans="1:7"/>';
+
+  // Row 12-16: Invoice info
+  const invNo = document.getElementById('invoiceNo')?.value || '';
+  const invDate = document.getElementById('invoiceDate')?.value || '';
+  const poNo = document.getElementById('poNo')?.value || '';
+
+  xml += '<row r="12" spans="1:7">';
+  xml += '<c r="E12" t="s"><v>' + si('Invoice No.:') + '</v></c>';
+  xml += '<c r="F12" t="s"><v>' + si(invNo) + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="13" spans="1:7">';
+  xml += '<c r="E13" t="s"><v>' + si('Date:') + '</v></c>';
+  xml += '<c r="F13" t="s"><v>' + si(invDate) + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="14" spans="1:7">';
+  xml += '<c r="E14" t="s"><v>' + si('P/O No.:') + '</v></c>';
+  xml += '<c r="F14" t="s"><v>' + si(poNo) + '</v></c>';
+  xml += '</row>';
+
+  // Row 15-16: empty
+  xml += '<row r="15" spans="1:7"/>';
+  xml += '<row r="16" spans="1:7"/>';
+
+  // Row 17-18: empty
+  xml += '<row r="17" spans="1:7"/>';
+  xml += '<row r="18" spans="1:7"/>';
+
+  // Row 19: empty
+  xml += '<row r="19" spans="1:7"/>';
+
+  // === DATA HEADER (Row 20) ===
+  xml += '<row r="20" spans="1:7">';
+  xml += '<c r="A20" t="s"><v>' + si('PO No.') + '</v></c>';
+  xml += '<c r="B20" t="s"><v>' + si('PG item no.') + '</v></c>';
+  xml += '<c r="C20" t="s"><v>' + si('Flex') + '</v></c>';
+  xml += '<c r="D20" t="s"><v>' + si('NF item no.') + '</v></c>';
+  xml += '<c r="E20" t="s"><v>' + si('Qty (pcs)') + '</v></c>';
+  xml += '<c r="F20" t="s"><v>' + si('Unit price') + '</v></c>';
+  xml += '<c r="G20" t="s"><v>' + si('Amount') + '</v></c>';
+  xml += '</row>';
+
+  // === DATA ROWS (Row 21+) ===
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const r = 21 + i;
+    xml += '<row r="' + r + '" spans="1:7">';
+    xml += '<c r="A' + r + '" t="s"><v>' + si(row.po) + '</v></c>';
+    xml += '<c r="B' + r + '" t="s"><v>' + si(row.itemCode) + '</v></c>';
+    xml += '<c r="C' + r + '" t="s"><v>' + si(row.flex) + '</v></c>';
+    xml += '<c r="D' + r + '" t="s"><v>' + si(row.nfItem) + '</v></c>';
+    xml += '<c r="E' + r + '"><v>' + (parseFloat(row.qty) || 0) + '</v></c>';
+    xml += '<c r="F' + r + '"><v>' + (parseFloat(row.unitPrice) || 0) + '</v></c>';
+    xml += '<c r="G' + r + '"><v>' + (parseFloat(row.amount) || 0) + '</v></c>';
+    xml += '</row>';
+  }
+
+  // Row 38: Made in China (spacer)
+  xml += '<row r="38" spans="1:7">';
+  xml += '<c r="A38" t="s"><v>' + si('Made in China') + '</v></c>';
+  xml += '</row>';
+
+  // Row 39: Subtotal
+  const totalQty = rows.reduce((s, r) => s + (parseInt(r.qty) || 0), 0);
+  const totalAmt = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  xml += '<row r="39" spans="1:7">';
+  xml += '<c r="E39"><v>' + totalQty + '</v></c>';
+  xml += '<c r="G39"><v>' + totalAmt + '</v></c>';
+  xml += '</row>';
+
+  // Row 40: empty spacer
+  xml += '<row r="40" spans="1:7"/>';
+
+  // Row 41: Says Total:
+  xml += '<row r="41" spans="1:7">';
+  xml += '<c r="A41" t="s"><v>' + si('Says Total:') + '</v></c>';
+  xml += '</row>';
+
+  // Row 44: Says Total English
+  const spellText = numberToWordsUSD(totalAmt);
+  xml += '<row r="44" spans="1:7">';
+  xml += '<c r="A44" t="s"><v>' + si(spellText) + '</v></c>';
+  xml += '</row>';
+
+  // Row 45-48: Product info
+  xml += '<row r="45" spans="1:7">';
+  xml += '<c r="A45" t="s"><v>' + si('Product name') + '</v></c>';
+  xml += '<c r="B45" t="s"><v>' + si(s.productName || 'Golf Shaft') + '</v></c>';
+  xml += '<c r="D45" t="s"><v>' + si('HS Code') + '</v></c>';
+  xml += '<c r="E45" t="s"><v>' + si(s.hsCode || '95063900') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="46" spans="1:7">';
+  xml += '<c r="A46" t="s"><v>' + si('Material') + '</v></c>';
+  xml += '<c r="B46" t="s"><v>' + si(s.material || 'Carbon Fiber') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="47" spans="1:7"/>';
+
+  xml += '<row r="48" spans="1:7">';
+  xml += '<c r="A48" t="s"><v>' + si('Made in China') + '</v></c>';
+  xml += '</row>';
+
+  // Row 49: Payment
+  xml += '<row r="49" spans="1:7">';
+  xml += '<c r="A49" t="s"><v>' + si('Payment') + '</v></c>';
+  xml += '<c r="B49" t="s"><v>' + si(s.paymentTerms || 'By O/A 45 days') + '</v></c>';
+  xml += '</row>';
+
+  // Row 50-53: Bank Info
+  xml += '<row r="50" spans="1:7">';
+  xml += '<c r="A50" t="s"><v>' + si('Bank') + '</v></c>';
+  xml += '<c r="B50" t="s"><v>' + si(s.bankName || 'DBS Bank (Taiwan) Ltd.') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="51" spans="1:7">';
+  xml += '<c r="B51" t="s"><v>' + si(s.bankAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="52" spans="1:7">';
+  xml += '<c r="B52" t="s"><v>' + si('A/C:') + '</v></c>';
+  xml += '<c r="C52" t="s"><v>' + si(s.bankAccount || '7850014299') + '</v></c>';
+  xml += '<c r="D52" t="s"><v>' + si('Swift:') + '</v></c>';
+  xml += '<c r="E52" t="s"><v>' + si(s.bankSwift || 'DBSSTWTB') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="53" spans="1:7"/>';
+
+  // Row 54-56: Beneficiary
+  xml += '<row r="54" spans="1:7">';
+  xml += '<c r="A54" t="s"><v>' + si('Beneficiary:') + '</v></c>';
+  xml += '<c r="B54" t="s"><v>' + si(s.beneficiaryName || 'NEO-FIBER INDUSTRIAL CO., LTD.') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="55" spans="1:7">';
+  xml += '<c r="B55" t="s"><v>' + si(s.beneficiaryAddress || '7F., No.109, MinSheng E. Rd., Sec. 3, Taipei 10585, Taiwan') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="56" spans="1:7"/>';
+
+  // Row 57: Signature
+  xml += '<row r="57" spans="1:7">';
+  xml += '<c r="B57" t="s"><v>' + si('For and on behalf of') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="58" spans="1:7">';
+  xml += '<c r="B58" t="s"><v>' + si('________________________') + '</v></c>';
+  xml += '</row>';
+
+  xml += '<row r="59" spans="1:7">';
+  xml += '<c r="B59" t="s"><v>' + si(s.signatoryName || 'Annie Yu') + '</v></c>';
+  xml += '</row>';
+
+  xml += '</sheetData>';
+
+  // Merge cells (from original template)
+  xml += '<mergeCells count="16">';
+  xml += '<mergeCell ref="A1:G1"/>';
+  xml += '<mergeCell ref="A8:C8"/>';
+  xml += '<mergeCell ref="A9:C9"/>';
+  xml += '<mergeCell ref="A10:C10"/>';
+  xml += '<mergeCell ref="A11:C11"/>';
+  xml += '<mergeCell ref="D8:F8"/>';
+  xml += '<mergeCell ref="D9:F9"/>';
+  xml += '<mergeCell ref="D10:F10"/>';
+  xml += '<mergeCell ref="D11:F11"/>';
+  xml += '<mergeCell ref="A44:G44"/>';
+  xml += '<mergeCell ref="B54:E54"/>';
+  xml += '<mergeCell ref="B50:E50"/>';
+  xml += '<mergeCell ref="B51:E51"/>';
+  xml += '<mergeCell ref="B55:E55"/>';
+  xml += '<mergeCell ref="A38:G38"/>';
+  xml += '<mergeCell ref="A48:G48"/>';
+  xml += '</mergeCells>';
+
+  // Drawing relationship
+  xml += '<drawing r:id="rId1"/>';
+
+  xml += '</worksheet>';
+  return xml;
+}
+
+/**
+ * Build CI Sheet (Sheet2) XML
+ */
+function buildCISheet(rows, ssTexts) {
+  const s = getSettings();
+  const textMap = {};
+  ssTexts.forEach((t, i) => textMap[t] = i);
+  function si(text) { return textMap[text] !== undefined ? textMap[text] : 0; }
+
+  const totalQty = rows.reduce((sum, r) => sum + (parseInt(r.qty) || 0), 0);
+  const totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+
+  let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+  xml += ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
+  xml += '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>';
+  xml += '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
+  xml += '<sheetFormatPr defaultRowHeight="15" defaultColWidth="8.43"/>';
+
+  xml += '<cols>';
+  xml += '<col min="1" max="1" width="21.5" customWidth="1"/>';
+  xml += '<col min="2" max="2" width="21.5" customWidth="1"/>';
+  xml += '<col min="3" max="3" width="6.5" customWidth="1"/>';
+  xml += '<col min="4" max="4" width="19.5" customWidth="1"/>';
+  xml += '<col min="5" max="5" width="12" customWidth="1"/>';
+  xml += '<col min="6" max="6" width="12" customWidth="1"/>';
+  xml += '<col min="7" max="7" width="12.5" customWidth="1"/>';
+  xml += '</cols>';
+
+  xml += '<sheetData>';
+
+  // Row 8: Title
+  xml += '<row r="8" spans="1:7" ht="30.75" customHeight="1">';
+  xml += '<c r="A8" t="s"><v>' + si('COMMERCIAL INVOICE') + '</v></c>';
+  xml += '</row>';
+
+  // Row 9-16: empty
+  for (let r = 9; r <= 16; r++) {
+    xml += '<row r="' + r + '" spans="1:7"/>';
+  }
+
+  // Row 17: Data header
+  xml += '<row r="17" spans="1:7">';
+  xml += '<c r="A17" t="s"><v>' + si('PO No.') + '</v></c>';
+  xml += '<c r="B17" t="s"><v>' + si('PG item no.') + '</v></c>';
+  xml += '<c r="C17" t="s"><v>' + si('Flex') + '</v></c>';
+  xml += '<c r="D17" t="s"><v>' + si('NF item no.') + '</v></c>';
+  xml += '<c r="E17" t="s"><v>' + si('Qty (pcs)') + '</v></c>';
+  xml += '<c r="F17" t="s"><v>' + si('Unit price') + '</v></c>';
+  xml += '<c r="G17" t="s"><v>' + si('Amount') + '</v></c>';
+  xml += '</row>';
+
+  // Data rows
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const r = 18 + i;
+    xml += '<row r="' + r + '" spans="1:7">';
+    xml += '<c r="A' + r + '" t="s"><v>' + si(row.po) + '</v></c>';
+    xml += '<c r="B' + r + '" t="s"><v>' + si(row.itemCode) + '</v></c>';
+    xml += '<c r="C' + r + '" t="s"><v>' + si(row.flex) + '</v></c>';
+    xml += '<c r="D' + r + '" t="s"><v>' + si(row.nfItem) + '</v></c>';
+    xml += '<c r="E' + r + '"><v>' + (parseFloat(row.qty) || 0) + '</v></c>';
+    xml += '<c r="F' + r + '"><v>' + (parseFloat(row.unitPrice) || 0) + '</v></c>';
+    xml += '<c r="G' + r + '"><v>' + (parseFloat(row.amount) || 0) + '</v></c>';
+    xml += '</row>';
+  }
+
+  // Row 60: Total
+  xml += '<row r="60" spans="1:7">';
+  xml += '<c r="E60"><v>' + totalQty + '</v></c>';
+  xml += '<c r="G60"><v>' + totalAmt + '</v></c>';
+  xml += '</row>';
+
+  // Row 62: Says Total:
+  xml += '<row r="62" spans="1:7">';
+  xml += '<c r="A62" t="s"><v>' + si('Says Total:') + '</v></c>';
+  xml += '</row>';
+
+  // Row 64: English
+  const spellText = numberToWordsUSD(totalAmt);
+  xml += '<row r="64" spans="1:7">';
+  xml += '<c r="A64" t="s"><v>' + si(spellText) + '</v></c>';
+  xml += '</row>';
+
+  // Row 65: HS Code
+  xml += '<row r="65" spans="1:7">';
+  xml += '<c r="A65" t="s"><v>' + si('HS Code') + '</v></c>';
+  xml += '<c r="B65" t="s"><v>' + si(s.hsCode || '95063900') + '</v></c>';
+  xml += '</row>';
+
+  // Row 66: Material
+  xml += '<row r="66" spans="1:7">';
+  xml += '<c r="A66" t="s"><v>' + si('Material :') + '</v></c>';
+  xml += '<c r="B66" t="s"><v>' + si(s.material || 'Carbon Fiber') + '</v></c>';
+  xml += '</row>';
+
+  // Row 67: Made in China
+  xml += '<row r="67" spans="1:7">';
+  xml += '<c r="A67" t="s"><v>' + si('MADE IN CHINA') + '</v></c>';
+  xml += '</row>';
+
+  xml += '</sheetData>';
+
+  xml += '<mergeCells count="3">';
+  xml += '<mergeCell ref="A8:G8"/>';
+  xml += '<mergeCell ref="A64:G64"/>';
+  xml += '<mergeCell ref="A60:C60"/>';
+  xml += '</mergeCells>';
+
+  xml += '<drawing r:id="rId1"/>';
+
+  xml += '</worksheet>';
+  return xml;
+}
+
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
