@@ -3363,6 +3363,110 @@ function numberToWordsUSD(amount) {
   return result;
 }
 
+// ============================================================
+// TEMPLATE EDITOR — Apply to Create Invoice Export
+// ============================================================
+
+/**
+ * Apply Template Editor configuration to a worksheet XML before data export.
+ * - Rewrites header row with custom labels
+ * - Removes hidden fields from the cols object (so they won't be written)
+ * - Clears header cells for hidden fields
+ */
+function applyTemplateEditorToSheet(sheetXml, ssStrings, clientKey, docType, docCfg, cols) {
+  const tmpl = loadExportTemplate(clientKey) || {};
+  const docTmpl = tmpl[docType] || {};
+  const disabledFields = docTmpl.disabledFields || [];
+  const customLabels = docTmpl.labels || {};
+
+  // 1. Remove hidden fields from cols (so data writing skips them)
+  for (const field of disabledFields) {
+    delete cols[field];
+  }
+
+  // 2. Rewrite header row with effective labels
+  const headerRowNum = docCfg.dataStartRow - 1;
+  const allDataFields = Object.keys(docCfg.cols).filter(f => f !== 'line');
+  for (const field of allDataFields) {
+    const col = cols[field] || docCfg.cols[field];
+    if (!col) continue;
+    const info = EF_FIELD_INFO[field] || { label: field };
+    const defaultLabel = info.label;
+    const label = customLabels[field] || defaultLabel;
+    const cellRef = col + headerRowNum;
+    sheetXml = setCellValue(sheetXml, ssStrings, cellRef, label, 'sharedStr');
+  }
+
+  // 3. Clear header cells for hidden fields (remove old header text)
+  for (const field of disabledFields) {
+    const col = docCfg.cols[field];
+    if (!col) continue;
+    const cellRef = col + headerRowNum;
+    // Match cell and remove its inner value content, keeping the <c> tag for style preservation
+    sheetXml = sheetXml.replace(
+      new RegExp(`(<c r="${cellRef}"[^>]*>)(?:<v>[^<]*<\/v>|<f>[^<]*<\/f>|<is>[^<]*<\/is>)?(</c>)`, 'g'),
+      '$1$2'
+    );
+  }
+
+  return sheetXml;
+}
+
+/**
+ * Find and replace SpellNumberToEnglish / NumberToWords formulas with JS-computed text.
+ * This allows amount column to be moved without breaking the formula.
+ */
+function replaceSpellNumberFormulas(sheetXml, ssStrings, totalAmount, amountCol) {
+  // Find cells containing SpellNumberToEnglish or NumberToWords formulas
+  const formulaRegex = /<c([^>]*)><f>(SpellNumberToEnglish|NumberToWords)\([A-Z]+\d+\)<\/f><\/c>/gi;
+  
+  // Replace with inline string containing the spelled-out amount
+  const spelled = numberToWordsUSD(totalAmount);
+  sheetXml = sheetXml.replace(formulaRegex, (match, cAttrs) => {
+    if (!cAttrs.includes('t="')) {
+      cAttrs += ' t="inlineStr"';
+    }
+    const escapedText = spelled.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<c${cAttrs}><is><t>${escapedText}</t></is></c>`;
+  });
+
+  return sheetXml;
+}
+
+/**
+ * Update SUM formula references to point to the correct amount and qty columns.
+ * This is needed when Column Mapping changes the column positions.
+ */
+function updateSumFormulas(sheetXml, amountCol, qtyCol, startRow, lastDataRow) {
+  // Update SUM formulas for amount column
+  if (amountCol) {
+    sheetXml = sheetXml.replace(
+      new RegExp(`SUM\\([A-Z]+\\d+:[A-Z]+\\d+\\)`, 'g'),
+      (match) => {
+        if (match.includes(amountCol)) {
+          return `SUM(${amountCol}${startRow}:${amountCol}${lastDataRow})`;
+        }
+        return match;
+      }
+    );
+  }
+  
+  // Update SUM formulas for qty column
+  if (qtyCol && qtyCol !== amountCol) {
+    sheetXml = sheetXml.replace(
+      new RegExp(`SUM\\([A-Z]+\\d+:[A-Z]+\\d+\\)`, 'g'),
+      (match) => {
+        if (match.includes(qtyCol)) {
+          return `SUM(${qtyCol}${startRow}:${qtyCol}${lastDataRow})`;
+        }
+        return match;
+      }
+    );
+  }
+
+  return sheetXml;
+}
+
 async function downloadExcel() {
   const clientKey = state.selectedClient;
   if (!clientKey) { toast('Please select a client first', 'error'); return; }
@@ -3486,6 +3590,9 @@ async function downloadExcel() {
     const cols = { ...getEffectiveCols(clientKey, state.docType, docCfg.cols) }; // [ExportFormat] Apply custom col overrides
     const numDataRows = rows.length;
     const isCustomClient = clientKey.startsWith('custom_');
+
+    // [TemplateEditor] Apply custom labels and hide fields to Invoice sheet
+    sheetXml = applyTemplateEditorToSheet(sheetXml, ssStrings, clientKey, state.docType, docCfg, cols);
 
     // Step 1a: For custom clients, ensure all required data rows exist in XML
     // If the template only has 1 pre-allocated row but user has more data rows,
@@ -3670,6 +3777,9 @@ async function downloadExcel() {
     // Determine qty and amount column letters from cols config
     const qtyCol = cols.qty || 'E';
     const amtCol = cols.amount || 'G';
+    // [TemplateEditor] Update SUM formulas to match potentially moved columns
+    sheetXml = updateSumFormulas(sheetXml, amtCol, qtyCol, startRow, lastDataRow);
+
     // Update SUM(qtyCol:...) -> SUM(qtyCol{startRow}:qtyCol{lastDataRow})
     sheetXml = sheetXml.replace(
       new RegExp(`SUM\\(${qtyCol}\\d+:${qtyCol}\\d+\\)`, 'g'),
@@ -3694,8 +3804,9 @@ async function downloadExcel() {
       );
     }
 
-
-
+    // [TemplateEditor] Replace SpellNumber formulas with JS-computed text for all clients
+    const _totalAmtInvoice = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    sheetXml = replaceSpellNumberFormulas(sheetXml, ssStrings, _totalAmtInvoice, amtCol);
 
     // Step 3b: Fill Says Total and Payment Terms (for Master Template / custom clients)
     const _footerOffset = docCfg._footerOffset || 0; // rows shifted due to extra data rows
@@ -3780,6 +3891,9 @@ async function downloadExcel() {
       const ciFooterRow = ciCfg.footerRow || (ciStartRow + 50);
       const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) }; // [ExportFormat] Apply custom col overrides
       const ciIndexMode = ciCfg.indexFormulaMode === true;
+
+      // [TemplateEditor] Apply custom labels and hide fields to CI sheet
+      ciXml = applyTemplateEditorToSheet(ciXml, ssStrings, clientKey, 'ci', ciCfg, ciCols);
 
       if (!ciIndexMode) {
         // Standard mode: manually write data into CI rows
@@ -3925,6 +4039,13 @@ async function downloadExcel() {
         }
       }
       // In indexFormulaMode: CI data rows use INDEX formulas from Invoice sheet
+
+      // [TemplateEditor] Update CI SUM formulas to match potentially moved columns
+      ciXml = updateSumFormulas(ciXml, ciAmtCol, ciQtyCol, ciStartRow, ciStartRow + numDataRows - 1);
+
+      // [TemplateEditor] Replace SpellNumber formulas with JS-computed text for all clients
+      const _ciTotalAmtPre = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+      ciXml = replaceSpellNumberFormulas(ciXml, ssStrings, _ciTotalAmtPre, ciAmtCol);
       // No need to fill data rows - they auto-update from Invoice sheet
       // Only Invoice No, Date, and customer info need to be filled (done above/below)
 
