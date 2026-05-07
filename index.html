@@ -699,7 +699,7 @@ input[type=number] { -moz-appearance: textfield; }
     <div class="card-header" id="step5Header"><span class="step-badge">5</span> Generate Excel File</div>
     <div class="card-body">
       <div class="action-bar" id="step5ActionBar">
-        <button class="btn btn-success" id="btnDownload" onclick="downloadExcel()">⬇ Download Invoice + CI (.xlsm)</button>
+        <button class="btn btn-success" id="btnDownload" onclick="downloadExcel()">⬇ Download Invoice + CI (.xlsx)</button>
         <button class="btn btn-outline" onclick="addRow()">+ Add Row</button>
         <button class="btn btn-outline" onclick="removeLastRow()">− Remove Last Row</button>
         <button id="btnUndo" class="btn btn-outline" onclick="undoAction()" disabled title="Nothing to undo">↩ Undo (Ctrl+Z)</button>
@@ -929,7 +929,7 @@ input[type=number] { -moz-appearance: textfield; }
           <td>2026-04-17</td>
           <td>4850</td>
           <td>$37701.80</td>
-          <td style="font-size:11px;color:var(--text-muted)">PGUS_INVOICE_CI_123123132.xlsm</td>
+          <td style="font-size:11px;color:var(--text-muted)">PGUS_INVOICE_CI_123123132.xlsx</td>
         </tr>
       </tbody>
     </table>
@@ -3050,7 +3050,7 @@ function _updateStep5UI() {
     btnDownload.onclick = () => saveHistoryEditFromForm(true);
   } else {
     header.innerHTML = '<span class="step-badge">5</span> Generate Excel File';
-    btnDownload.textContent = '⬇ Download Invoice + CI (.xlsm)';
+    btnDownload.textContent = '⬇ Download Invoice + CI (.xlsx)';
     btnDownload.style.background = '';
     btnDownload.style.borderColor = '';
     btnDownload.onclick = downloadExcel;
@@ -3397,16 +3397,59 @@ function applyTemplateEditorToSheet(sheetXml, ssStrings, clientKey, docType, doc
     sheetXml = setCellValue(sheetXml, ssStrings, cellRef, label, 'sharedStr');
   }
 
-  // 3. Clear header cells for hidden fields (remove old header text)
+  // 3. For hidden fields: completely REMOVE their <c> cells from ALL rows (not just empty them)
+  //    Also mark the column as hidden in <cols> so Excel truly collapses the column.
+  const hiddenCols = [];
   for (const field of disabledFields) {
     const col = docCfg.cols[field];
     if (!col) continue;
-    const cellRef = col + headerRowNum;
-    // Match cell and remove its inner value content, keeping the <c> tag for style preservation
-    sheetXml = sheetXml.replace(
-      new RegExp(`(<c r="${cellRef}"[^>]*>)(?:<v>[^<]*<\/v>|<f>[^<]*<\/f>|<is>[^<]*<\/is>)?(</c>)`, 'g'),
-      '$1$2'
-    );
+    hiddenCols.push(col);
+    // Remove ALL <c> cells in this column from ALL rows in the sheet
+    // Match <c r="COL\d+" ...>...</c> and remove completely
+    const cellRegex = new RegExp(`<c\\s+r="${col}\\d+"[^>]*>(?:.*?<\\/c>)`, 'g');
+    sheetXml = sheetXml.replace(cellRegex, '');
+  }
+
+  // 4. Mark hidden columns in <cols> tag: set hidden="1" width="0"
+  if (hiddenCols.length > 0) {
+    // Parse column letters to indices (A=1, B=2, ...)
+    const colToIdx = (c) => {
+      let idx = 0;
+      for (let i = 0; i < c.length; i++) {
+        idx = idx * 26 + (c.charCodeAt(i) - 64);
+      }
+      return idx;
+    };
+    const hiddenIndices = hiddenCols.map(colToIdx).sort((a, b) => a - b);
+
+    // Check if sheet has a <cols> section
+    if (sheetXml.includes('<cols>')) {
+      // For each hidden column, find or create its <col> entry and mark hidden
+      for (const idx of hiddenIndices) {
+        const colRegex = new RegExp(`(<col[^>]*\\bmin="${idx}"[^>]*\\bmax="${idx}"[^>]*?)(/?>)`, 'g');
+        if (colRegex.test(sheetXml)) {
+          // Existing <col> for this column: add hidden="1" width="0"
+          sheetXml = sheetXml.replace(colRegex, (match, prefix, close) => {
+            // Remove any existing width/hidden attributes to avoid duplication
+            let cleanPrefix = prefix.replace(/\swidth="[^"]*"/g, '').replace(/\shidden="[^"]*"/g);
+            return `${cleanPrefix} width="0" hidden="1"${close}`;
+          });
+        } else {
+          // No <col> entry for this column; check if it's covered by a range <col min="1" max="7">
+          const rangeRegex = new RegExp(`<col([^>]*)\\bmin="\\d+"[^>]*\\bmax="${idx}"[^>]*?/>`, 'g');
+          // Complex: splitting ranges would require more logic. For now we insert a specific <col>.
+          const insertCol = `<col min="${idx}" max="${idx}" width="0" hidden="1"/>`;
+          sheetXml = sheetXml.replace('<cols>', `<cols>${insertCol}`);
+        }
+      }
+    } else {
+      // No <cols> section at all — create one right after <sheetData> or at sheet root
+      const colsXml = '<cols>' + hiddenIndices.map(idx => `<col min="${idx}" max="${idx}" width="0" hidden="1"/>`).join('') + '</cols>';
+      // Insert before <sheetData> if present, otherwise after <sheetViews>
+      if (sheetXml.includes('<sheetData>')) {
+        sheetXml = sheetXml.replace('<sheetData>', `${colsXml}<sheetData>`);
+      }
+    }
   }
 
   return sheetXml;
@@ -3524,7 +3567,7 @@ async function downloadExcel() {
       }
       templateB64 = TEMPLATES_B64[fallbackKey];
       if (!templateB64) {
-        toast('⚠ No Excel template found for this client. Please go to Custom Clients → Edit → Import from Excel Template to upload your .xlsm template first.', 'error');
+        toast('⚠ No Excel template found for this client. Please go to Custom Clients → Edit → Import from Excel Template to upload your .xlsx template first.', 'error');
         return;
       }
       toast(`ℹ Using default template (${fallbackKey}) for ${ccObj?.name || clientKey}`, 'info');
@@ -4283,20 +4326,32 @@ async function downloadExcel() {
       zip.file('[Content_Types].xml', ctXml);
     }
 
+    // [Scheme-C] Remove VBA macro project to produce clean .xlsx
+    if (zip.file('xl/vbaProject.bin')) {
+      zip.remove('xl/vbaProject.bin');
+      // Remove vbaProject relationship from workbook.xml.rels
+      wbRels = wbRels.replace(/<Relationship[^>]*Type="[^"]*vbaProject"[^>]*\/>/gi, '');
+      // Remove vbaProject Override from Content_Types.xml
+      ctXml = ctXml.replace(/<Override[^>]*PartName="\/xl\/vbaProject\.bin"[^>]*\/>/gi, '');
+    }
+    // Also remove any macro-enabled content type declaration from CT
+    ctXml = ctXml.replace(/<Default[^>]*Extension="vbaProject"[^>]*\/>/gi, '');
+    ctXml = ctXml.replace(/<Default[^>]*ContentType="[^"]*macroEnabled"[^>]*\/>/gi, '');
+
     zip.file('xl/sharedStrings.xml', ssXml);
 
-    // Generate file (always output as Invoice+CI combined)
+    // Generate file (always output as Invoice+CI combined) — Scheme-C: pure .xlsx, no macros
     const blob = await zip.generateAsync({
       type: 'blob',
-      mimeType: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       compression: 'DEFLATE'
     });
 
     const safeInv = invoiceNo.replace(/[\/\\#\s]/g, '_');
     const defaultName = `${cfg.code}_INVOICE_CI_PL_${safeInv}`;
-    const userFileName = await promptFileName(defaultName, 'xlsm');
+    const userFileName = await promptFileName(defaultName, 'xlsx');
     if (userFileName === null) return; // user cancelled
-    const filename = userFileName + '.xlsm';
+    const filename = userFileName + '.xlsx';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
