@@ -12993,11 +12993,27 @@ function getOrderUnitPrice(plan) {
     if (o && parseFloat(o.unitPrice) > 0) return parseFloat(o.unitPrice);
   }
 
-  // 2. Price Database — try multiple client keys (PGCanada vs PGC)
+  // 2. Price Database — try multiple client keys and aliases
   const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
-  const clientCode = (CLIENT_CONFIGS[ck2] || {}).code || ck2;
+  const cfg = CLIENT_CONFIGS[ck2] || {};
+  const clientCode = cfg.code || ck2;
+  const clientLabel = cfg.label || ck2;
+  const templateKey = cfg.templateKey || ck2;
+  // Normalize label for lookup: remove spaces, lowercase
+  const labelNorm = clientLabel.toLowerCase().replace(/\s+/g, '');
 
-  for (const dbKey of [ck2, clientCode]) {
+  // Collect all possible DB keys
+  const dbKeys = [...new Set([ck2, clientCode, templateKey, clientLabel, labelNorm])];
+  // Also try common aliases from DEFAULT_CUSTOMER_INFO
+  const infoKeys = Object.keys(DEFAULT_CUSTOMER_INFO || {});
+  infoKeys.forEach(k => {
+    const info = DEFAULT_CUSTOMER_INFO[k];
+    if (info.name && info.name.toLowerCase().replace(/\s+/g,'') === labelNorm) {
+      dbKeys.push(k);
+    }
+  });
+
+  for (const dbKey of dbKeys) {
     const db = priceDB[dbKey];
     if (!db) continue;
     // Legacy format: db.items
@@ -13011,6 +13027,11 @@ function getOrderUnitPrice(plan) {
     // Cloud format: db[itemCode].price
     if (db[pItem] && db[pItem].price > 0) {
       return db[pItem].price;
+    }
+    // Cloud format with lowercase itemCode
+    const pItemLower = pItem.toLowerCase();
+    if (db[pItemLower] && db[pItemLower].price > 0) {
+      return db[pItemLower].price;
     }
   }
 
