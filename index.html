@@ -12335,7 +12335,7 @@ function buildCashFlowForecastRows(clientKey) {
   const planRows = [];
 
   (spPlans[clientKey] || []).forEach(p => {
-    const unitPrice = parseFloat(p.unitPrice) || 0;
+    const unitPrice = getOrderUnitPrice(p);
     if (unitPrice <= 0) return;
 
     const orderQty = getOrderQty(p);
@@ -12861,6 +12861,22 @@ function getOutstanding(plan) {
 }
 function getOrderQtyDisplay(plan) {
   return getOrderQty(plan);
+}
+
+function getOrderUnitPrice(plan) {
+  const ck2 = plan._clientKey;
+  const planPrice = parseFloat(plan.unitPrice) || 0;
+  if (!ck2) return planPrice;
+  const orders = getClientOrders(ck2) || [];
+  if (!orders.length) return planPrice;
+  const pNo = (plan.poNo || '').toString().trim();
+  const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
+  let o = orders.find(x =>
+    (x.poNo||'').toString().trim() === pNo &&
+    (x.itemCode||'').toString().trim().toUpperCase() === pItem
+  );
+  if (!o && pNo) o = orders.find(x => (x.poNo||'').toString().trim() === pNo);
+  return o ? (parseFloat(o.unitPrice)||0) : planPrice;
 }
 
 function renderShipmentPlannerTimeline() {
