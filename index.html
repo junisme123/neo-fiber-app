@@ -12319,9 +12319,74 @@ function buildCashFlowRows(filterClientKey) {
 }
 
 /**
- * Export Cash Flow Forecast as Excel (2 sheets):
- *   Sheet 1 – Detail: one row per shipment
- *   Sheet 2 – Monthly Summary: grouped by receipt month
+ * Build forecast rows grouped by plan (PO + item), with monthly pivot columns.
+ * Returns { plans, months, monthShipDates, monthMappings, clientLabel, payDays }
+ */
+function buildCashFlowForecastRows(clientKey) {
+  loadSpPlans();
+  const payDays = spGetPayDays(clientKey);
+  const clientLabel = clientKey.startsWith('custom_')
+    ? (customClients.find(x => 'custom_' + x.code === clientKey) || {}).label || clientKey
+    : (CLIENT_CONFIGS[clientKey] || {}).label || clientKey;
+
+  const allMonths = new Set();
+  const monthShipDates = {};   // { 'YYYY-MM': Set('MM/DD', ...) }
+  const monthMappings = [];    // [{ shipDate, receiptDate }]
+  const planRows = [];
+
+  (spPlans[clientKey] || []).forEach(p => {
+    const unitPrice = parseFloat(p.unitPrice) || 0;
+    if (unitPrice <= 0) return;
+
+    const orderQty = getOrderQty(p);
+    const shippedQty = (p.actualShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+    const plannedQty = (p.plannedShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
+    const outstanding = Math.max(0, orderQty - shippedQty - plannedQty);
+    const stockValue = Math.max(0, orderQty - shippedQty) * unitPrice;
+
+    const monthAmounts = {};
+    [...(p.plannedShipments || []), ...(p.actualShipments || [])].forEach(s => {
+      if (!s.date || !s.qty) return;
+      const qty = parseFloat(s.qty) || 0;
+      const receiptDate = addDays(s.date, payDays);
+      const ym = receiptDate.slice(0, 7);
+      const amount = qty * unitPrice;
+      monthAmounts[ym] = (monthAmounts[ym] || 0) + amount;
+
+      allMonths.add(ym);
+      const shipLabel = fmtMMDD(s.date);
+      if (!monthShipDates[ym]) monthShipDates[ym] = new Set();
+      monthShipDates[ym].add(shipLabel);
+      monthMappings.push({ shipDate: shipLabel, receiptDate: fmtMMDD(receiptDate), receiptMonth: ym });
+    });
+
+    const tbd = outstanding * unitPrice;
+    const grandTotal = Object.values(monthAmounts).reduce((s, v) => s + v, 0) + tbd;
+
+    planRows.push({
+      poNo: p.poNo || '',
+      itemCode: p.itemCode || '',
+      unitPrice,
+      outstanding,
+      stockValue,
+      monthAmounts,
+      tbd,
+      grandTotal
+    });
+  });
+
+  const months = [...allMonths].sort();
+  return { plans: planRows, months, monthShipDates, monthMappings, clientLabel, payDays };
+}
+
+function fmtMMDD(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+}
+
+/**
+ * Export Cash Flow Forecast as Excel matching the sample format:
+ *   Single sheet with pivot-style monthly columns, TBD, Grand Total.
  */
 async function exportCashFlowExcel() {
   if (typeof XLSX === 'undefined') {
@@ -12331,79 +12396,89 @@ async function exportCashFlowExcel() {
   }
 
   const ck = (document.getElementById('sp_client') || {}).value || '';
-  const rows = buildCashFlowRows(ck);
+  const { plans, months, monthShipDates, monthMappings, clientLabel, payDays } = buildCashFlowForecastRows(ck);
 
-  if (!rows.length) {
+  if (!plans.length) {
     toast('No shipment data with unit prices to export', 'error');
     return;
   }
 
   const wb = XLSX.utils.book_new();
-  const today = new Date().toISOString().slice(0, 10);
+  const nowStr = new Date().toLocaleString('en-US', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
 
-  // ── Sheet 1: Detail ──
-  const detailHeader = [
-    'Client', 'PO#', 'Item Code', 'NF Spec', 'Color', 'Variable',
-    'Ship Date', 'Type', 'Qty', 'Unit Price (USD)', 'Amount (USD)',
-    'Payment Term (Days)', 'Expected Receipt Date', 'Status', 'Invoice#'
-  ];
-  const detailData = [detailHeader, ...rows.map(r => [
-    r.clientLabel, r.poNo, r.itemCode, r.nfSpec, r.color, r.variable,
-    r.shipDate, r.type === 'actual' ? 'Shipped' : 'Planned',
-    r.qty, r.unitPrice, parseFloat(r.amount.toFixed(2)),
-    r.payDays, r.receiptDate,
-    r.type === 'actual' ? (r.receiptDate <= today ? 'Overdue' : 'Awaiting Receipt') : 'Planned',
-    r.invoiceNo
-  ])];
-  const wsDetail = XLSX.utils.aoa_to_sheet(detailData);
+  // ── Build AOA data ──
+  const aoa = [];
+
+  // Row 1: Title
+  aoa.push([`${clientLabel} - Cashflow Forecast  (Payment Term: Shipment + ${payDays} Days)`]);
+
+  // Row 2: Meta
+  aoa.push([`Source: ${clientLabel} - Stock Value  |  Last updated: ${nowStr}  |  Shipment date + ${payDays} days = expected receipt month  |  TBD = long-term stock`]);
+
+  // Row 3: Headers
+  const headerRow = ['PO#', 'PG Code', 'Price\n(USD/pc)', 'Outstanding\nQTY', 'Total Stock\nValue (USD)'];
+  months.forEach(m => {
+    const d = new Date(m + '-01');
+    const monthName = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    const shipList = [...(monthShipDates[m] || [])].sort().join(', ');
+    headerRow.push(`Est. Receipt\n${monthName}\n(Ship: ${shipList})`);
+  });
+  headerRow.push('TBD\nLong-term\nStock Value (USD)', 'Grand Total\n(USD)');
+  aoa.push(headerRow);
+
+  // Row 4: Payment mapping
+  const mappingRow = ['Payment Term Applied:', '', '', '', ''];
+  months.forEach(m => {
+    const monthMaps = [];
+    monthMappings.forEach(x => {
+      if (x.receiptMonth === m) monthMaps.push(`${x.shipDate}->${x.receiptDate}`);
+    });
+    mappingRow.push([...new Set(monthMaps)].join(' | '));
+  });
+  mappingRow.push('No payment date - long-term warehouse stock', '');
+  aoa.push(mappingRow);
+
+  // Data rows
+  plans.forEach(p => {
+    const row = [p.poNo, p.itemCode, p.unitPrice, p.outstanding, p.stockValue];
+    months.forEach(m => { row.push(p.monthAmounts[m] || 0); });
+    row.push(p.tbd, p.grandTotal);
+    aoa.push(row);
+  });
+
+  // Totals row
+  const totalRow = ['TOTAL EXPECTED RECEIPTS (USD)', '', '', '', ''];
+  months.forEach(m => {
+    totalRow.push(plans.reduce((s, p) => s + (p.monthAmounts[m] || 0), 0));
+  });
+  totalRow.push(
+    plans.reduce((s, p) => s + p.tbd, 0),
+    plans.reduce((s, p) => s + p.grandTotal, 0)
+  );
+  aoa.push(totalRow);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
   // Column widths
-  wsDetail['!cols'] = [14,12,14,12,10,10,12,10,8,16,14,18,20,14,12].map(w=>({wch:w}));
-  XLSX.utils.book_append_sheet(wb, wsDetail, 'Cash Flow Detail');
+  const cols = [{ wch: 14 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }];
+  months.forEach(() => cols.push({ wch: 22 }));
+  cols.push({ wch: 18 }, { wch: 16 });
+  ws['!cols'] = cols;
 
-  // ── Sheet 2: Monthly Summary ──
-  const monthMap = {};
-  rows.forEach(r => {
-    const m = r.receiptDate.slice(0, 7); // YYYY-MM
-    if (!monthMap[m]) monthMap[m] = { planned: 0, actual: 0, overdue: 0 };
-    if (r.type === 'actual') {
-      if (r.receiptDate <= today) monthMap[m].overdue += r.amount;
-      else monthMap[m].actual += r.amount;
-    } else {
-      monthMap[m].planned += r.amount;
-    }
-  });
-  const summaryHeader = ['Month', 'Planned Receipt (USD)', 'Shipped – Awaiting (USD)', 'Overdue (USD)', 'Total Expected (USD)'];
-  const summaryData = [summaryHeader];
-  Object.keys(monthMap).sort().forEach(m => {
-    const v = monthMap[m];
-    const total = v.planned + v.actual + v.overdue;
-    summaryData.push([
-      m,
-      parseFloat(v.planned.toFixed(2)),
-      parseFloat(v.actual.toFixed(2)),
-      parseFloat(v.overdue.toFixed(2)),
-      parseFloat(total.toFixed(2))
-    ]);
-  });
-  // Grand total row
-  const grandPlanned = Object.values(monthMap).reduce((s,v)=>s+v.planned,0);
-  const grandActual  = Object.values(monthMap).reduce((s,v)=>s+v.actual,0);
-  const grandOverdue = Object.values(monthMap).reduce((s,v)=>s+v.overdue,0);
-  summaryData.push(['TOTAL',
-    parseFloat(grandPlanned.toFixed(2)),
-    parseFloat(grandActual.toFixed(2)),
-    parseFloat(grandOverdue.toFixed(2)),
-    parseFloat((grandPlanned+grandActual+grandOverdue).toFixed(2))
-  ]);
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
-  wsSummary['!cols'] = [12,22,24,18,20].map(w=>({wch:w}));
-  XLSX.utils.book_append_sheet(wb, wsSummary, 'Monthly Summary');
+  // Basic merges for title rows
+  const lastCol = headerRow.length - 1;
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Cashflow Forecast');
 
   // ── Download ──
-  const fname = await promptFileName('NeoFiber_CashFlow_' + today.replace(/-/g,''), 'xlsx');
+  const fname = await promptFileName(`${clientLabel.replace(/\s+/g,'_')}_Cashflow_Forecast`, 'xlsx');
   if (fname === null) return;
   XLSX.writeFile(wb, fname + '.xlsx');
-  toast('✓ Cash Flow exported: ' + rows.length + ' shipment rows', 'success');
+  toast(`✓ Cashflow Forecast exported: ${plans.length} items, ${months.length} months`, 'success');
 }
 
 // ══════════════════════════════════════════════════════════════════
