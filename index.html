@@ -12390,10 +12390,15 @@ function fmtMMDD(dateStr) {
  *   Single sheet with pivot-style monthly columns, TBD, Grand Total.
  */
 async function exportCashFlowExcel() {
-  if (typeof XLSX === 'undefined') {
+  // Load xlsx-style for styling support (fallback to standard xlsx if unavailable)
+  if (typeof XLSX === 'undefined' || !XLSX.SSF) {
     try {
-      await loadScript('https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js');
-    } catch(e) { toast('Failed to load Excel library', 'error'); return; }
+      await loadScript('https://cdn.jsdelivr.net/npm/xlsx-style@0.8.13/dist/xlsx.full.min.js');
+    } catch(e) {
+      try {
+        await loadScript('https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js');
+      } catch(e2) { toast('Failed to load Excel library', 'error'); return; }
+    }
   }
 
   const ck = (document.getElementById('sp_client') || {}).value || '';
@@ -12988,20 +12993,25 @@ function getOrderUnitPrice(plan) {
     if (o && parseFloat(o.unitPrice) > 0) return parseFloat(o.unitPrice);
   }
 
-  // 2. Price Database (legacy format: db.items)
-  const db = priceDB[ck2];
+  // 2. Price Database — try multiple client keys (PGCanada vs PGC)
   const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
-  if (db && db.items) {
-    const match = db.items.find(item =>
-      (item.customerCode || '').toUpperCase() === pItem ||
-      (item.itemCode || '').toUpperCase() === pItem
-    );
-    if (match && match.price > 0) return match.price;
-  }
+  const clientCode = (CLIENT_CONFIGS[ck2] || {}).code || ck2;
 
-  // 3. Price Database (new cloud format: db[itemCode].price)
-  if (db && db[pItem] && db[pItem].price > 0) {
-    return db[pItem].price;
+  for (const dbKey of [ck2, clientCode]) {
+    const db = priceDB[dbKey];
+    if (!db) continue;
+    // Legacy format: db.items
+    if (db.items) {
+      const match = db.items.find(item =>
+        (item.customerCode || '').toUpperCase() === pItem ||
+        (item.itemCode || '').toUpperCase() === pItem
+      );
+      if (match && match.price > 0) return match.price;
+    }
+    // Cloud format: db[itemCode].price
+    if (db[pItem] && db[pItem].price > 0) {
+      return db[pItem].price;
+    }
   }
 
   return planPrice;
