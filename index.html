@@ -12334,10 +12334,12 @@ function buildCashFlowForecastRows(clientKey) {
   const monthMappings = [];    // [{ shipDate, receiptDate }]
   const planRows = [];
 
+  let diagTotal = 0, diagNoPrice = 0, diagNoShipments = 0;
   (spPlans[clientKey] || []).forEach(p => {
+    diagTotal++;
     p._clientKey = clientKey;
     const unitPrice = getOrderUnitPrice(p);
-    if (unitPrice <= 0) return;
+    if (unitPrice <= 0) { diagNoPrice++; return; }
 
     const orderQty = getOrderQty(p);
     const shippedQty = (p.actualShipments || []).reduce((s, sh) => s + (parseFloat(sh.qty) || 0), 0);
@@ -12361,6 +12363,8 @@ function buildCashFlowForecastRows(clientKey) {
       monthMappings.push({ shipDate: shipLabel, receiptDate: fmtMMDD(receiptDate), receiptMonth: ym });
     });
 
+    if (Object.keys(monthAmounts).length === 0 && outstanding === 0) { diagNoShipments++; }
+
     const tbd = outstanding * unitPrice;
     const grandTotal = Object.values(monthAmounts).reduce((s, v) => s + v, 0) + tbd;
 
@@ -12375,6 +12379,11 @@ function buildCashFlowForecastRows(clientKey) {
       grandTotal
     });
   });
+
+  if (!planRows.length && diagTotal > 0) {
+    // Store diagnostics for export function to display
+    window._cfDiag = { total: diagTotal, noPrice: diagNoPrice, noShipments: diagNoShipments };
+  }
 
   const months = [...allMonths].sort();
   return { plans: planRows, months, monthShipDates, monthMappings, clientLabel, payDays };
@@ -12409,7 +12418,12 @@ async function exportCashFlowExcel() {
   const { plans, months, monthShipDates, monthMappings, clientLabel, payDays } = buildCashFlowForecastRows(ck);
 
   if (!plans.length) {
-    toast('No shipment data with unit prices to export', 'error');
+    const d = window._cfDiag;
+    if (d && d.total > 0) {
+      toast(`${d.total} plans found: ${d.noPrice} missing price, ${d.noShipments} no shipments. Add prices in Order Status or PriceDB.`, 'error');
+    } else {
+      toast('No shipment data with unit prices to export', 'error');
+    }
     return;
   }
 
