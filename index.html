@@ -12867,16 +12867,37 @@ function getOrderUnitPrice(plan) {
   const ck2 = plan._clientKey;
   const planPrice = parseFloat(plan.unitPrice) || 0;
   if (!ck2) return planPrice;
+
+  // 1. Order Status
   const orders = getClientOrders(ck2) || [];
-  if (!orders.length) return planPrice;
-  const pNo = (plan.poNo || '').toString().trim();
+  if (orders.length) {
+    const pNo = (plan.poNo || '').toString().trim();
+    const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
+    let o = orders.find(x =>
+      (x.poNo||'').toString().trim() === pNo &&
+      (x.itemCode||'').toString().trim().toUpperCase() === pItem
+    );
+    if (!o && pNo) o = orders.find(x => (x.poNo||'').toString().trim() === pNo);
+    if (o && parseFloat(o.unitPrice) > 0) return parseFloat(o.unitPrice);
+  }
+
+  // 2. Price Database (legacy format: db.items)
+  const db = priceDB[ck2];
   const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
-  let o = orders.find(x =>
-    (x.poNo||'').toString().trim() === pNo &&
-    (x.itemCode||'').toString().trim().toUpperCase() === pItem
-  );
-  if (!o && pNo) o = orders.find(x => (x.poNo||'').toString().trim() === pNo);
-  return o ? (parseFloat(o.unitPrice)||0) : planPrice;
+  if (db && db.items) {
+    const match = db.items.find(item =>
+      (item.customerCode || '').toUpperCase() === pItem ||
+      (item.itemCode || '').toUpperCase() === pItem
+    );
+    if (match && match.price > 0) return match.price;
+  }
+
+  // 3. Price Database (new cloud format: db[itemCode].price)
+  if (db && db[pItem] && db[pItem].price > 0) {
+    return db[pItem].price;
+  }
+
+  return planPrice;
 }
 
 function renderShipmentPlannerTimeline() {
