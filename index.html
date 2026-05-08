@@ -3294,7 +3294,8 @@ async function downloadExcel() {
   btn.disabled = true;
 
   try {
-    const cfg = CLIENT_CONFIGS[clientKey];
+    const cfg = getClientConfig(clientKey);
+    if (!cfg) { toast('No config found for this client.', 'error'); return; }
     const docCfg = cfg[state.docType];
     if (!docCfg) { toast('No ' + state.docType.toUpperCase() + ' config found for this client.', 'error'); return; }
 
@@ -3440,6 +3441,7 @@ async function downloadExcel() {
     // Step 5: Build CI sheet
     if (cfg.hasCI) {
       let ciXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
+      const ciCfg = cfg.ci;
       const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) };
       const ciDataStart = ciCfg.dataStartRow || 81;
       const ciFooterRow = ciCfg.footerRow || 96;
