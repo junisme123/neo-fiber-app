@@ -12396,6 +12396,10 @@ async function exportCashFlowExcel() {
   }
 
   const ck = (document.getElementById('sp_client') || {}).value || '';
+  if (!ck) {
+    toast('Please select a specific client before exporting Cashflow Forecast.', 'error');
+    return;
+  }
   const { plans, months, monthShipDates, monthMappings, clientLabel, payDays } = buildCashFlowForecastRows(ck);
 
   if (!plans.length) {
