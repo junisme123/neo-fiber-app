@@ -403,17 +403,7 @@
 <div class="toast-container" id="toastContainer">
   </div>
   <script>
-// Disable console output in production to prevent info leakage
-(function(){
-  if (typeof location !== 'undefined' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-    const noop = function(){};
-    console.log = noop;
-    console.warn = noop;
-    console.error = noop;
-    console.debug = noop;
-    console.info = noop;
-  }
-})();
+// Console output enabled for debugging
 
 // ============================================================
 // EMBEDDED DATA (injected by build script)
@@ -3356,7 +3346,12 @@ async function downloadExcel() {
     const invoiceDate = document.getElementById('invoiceDate')?.value || '';
 
     // Build sheets from template (fetch from GitHub first, fallback to embedded)
-    let templateB64 = await fetchTemplateFromGitHub(cfg.templateKey);
+    let templateB64 = null;
+    try {
+      templateB64 = await fetchTemplateFromGitHub(cfg.templateKey);
+    } catch (fetchErr) {
+      console.warn('Template fetch failed:', fetchErr.message);
+    }
     if (!templateB64) {
       templateB64 = TEMPLATES_B64[cfg.code] || TEMPLATES_B64[cfg._docKey] || MASTER_TEMPLATE_B64;
     }
@@ -3608,7 +3603,8 @@ async function downloadExcel() {
     URL.revokeObjectURL(url);
     toast('\u2705 Downloaded ' + filename, 'success');
   } catch (err) {
-    console.error(err);
+    console.error('DownloadExcel error:', err);
+    console.error('Stack:', err.stack);
     toast('Error generating file: ' + err.message, 'error');
   } finally {
     btn.textContent = '\u2b07 Download Invoice + CI (.xlsm)';
