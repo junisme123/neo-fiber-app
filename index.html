@@ -4048,10 +4048,62 @@ async function downloadExcel() {
     zip.file('xl/sharedStrings.xml', ssUpdateXml());
     zip.file('xl/worksheets/sheet1.xml', sheetXml);
 
-    // Step 5: Build CI sheet if applicable
-    const ciCfg = cfg.ci;
-    if (ciCfg && cfg.hasCI) {
-      // ... similar CI logic ...
+    // Step 5: Build CI sheet
+    if (cfg.hasCI) {
+      let ciXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
+      const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) };
+      const ciDataStart = ciCfg.dataStartRow || 81;
+      const ciFooterRow = ciCfg.footerRow || 96;
+
+      // Remove unused CI data rows
+      let ciBody = '';
+      let ciRowsToRemove = 0;
+      const ciRowRegex = /<row r="(\d+)"[^>]*>[\s\S]*?<\/row>/g;
+      while ((match = ciRowRegex.exec(ciXml)) !== null) {
+        const rowNum = parseInt(match[1]);
+        if (rowNum >= ciDataStart && rowNum < ciFooterRow) {
+          if (rowNum > ciDataStart + numDataRows - 1) {
+            ciRowsToRemove++;
+            continue;
+          }
+        }
+        ciBody += match[0] + '\n';
+      }
+      ciXml = ciXml.replace(/(<sheetData>)[\s\S]*?(<\/sheetData>)/, '$1\n' + ciBody.trim() + '\n$2');
+
+      // Write CI data rows
+      const ciQtyCol = ciCols.qty || 'E';
+      const ciAmtCol = ciCols.amount || 'G';
+      for (let i = 0; i < numDataRows; i++) {
+        const row = rows[i];
+        const rowNum = ciDataStart + i;
+        for (const [field, col] of Object.entries(ciCols)) {
+          if (field === 'line') continue;
+          if (field === 'qty' || field === 'unitPrice' || field === 'amount') {
+            ciXml = setCellValue(ciXml, ssStrings, col + rowNum, row[field], 'number');
+          } else {
+            ciXml = setCellValue(ciXml, ssStrings, col + rowNum, row[field], 'sharedStr');
+          }
+        }
+      }
+
+      // Fix CI footer formulas
+      const ciLastDataRow = ciDataStart + numDataRows - 1;
+      ciXml = ciXml.replace(new RegExp(`SUM\(${ciQtyCol}\d+:${ciQtyCol}\d+\)`, 'g'), `SUM(${ciQtyCol}${ciDataStart}:${ciQtyCol}${ciLastDataRow})`);
+      ciXml = ciXml.replace(new RegExp(`SUM\(${ciAmtCol}\d+:${ciAmtCol}\d+\)`, 'g'), `SUM(${ciAmtCol}${ciDataStart}:${ciAmtCol}${ciLastDataRow})`);
+
+      // Write CI Says Total
+      if (ciCfg.saysTotalCell) {
+        ciXml = setCellValue(ciXml, ssStrings, ciCfg.saysTotalCell, numberToWordsUSD(totalAmt), 'sharedStr');
+      }
+
+      // Write CI Product info
+      if (ciCfg.productCells) {
+        if (ciCfg.productCells.hsCode) ciXml = setCellValue(ciXml, ssStrings, ciCfg.productCells.hsCode, s.hsCode || '95063900', 'sharedStr');
+        if (ciCfg.productCells.material) ciXml = setCellValue(ciXml, ssStrings, ciCfg.productCells.material, s.material || 'Carbon Fiber', 'sharedStr');
+      }
+
+      zip.file('xl/worksheets/sheet2.xml', ciXml);
     }
 
     // Generate .xlsm blob
