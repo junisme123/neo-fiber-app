@@ -527,10 +527,22 @@ const DEFAULT_CUSTOMER_INFO = {
 const UNIFIED_DOC = {
   invoice: {
     sheetFile: 'xl/worksheets/sheet1.xml',
-    invoiceNoCell: 'B18', invoiceNoSsIdx: 513,
-    dateCellRef: 'F18', dateSsIdx: 6,
+    invoiceNoCell: 'B18',
+    dateCellRef: 'G18',
     cartonCellRef: null,
-    dataStartRow: 21, footerRow: 97,
+    dataStartRow: 21, footerRow: 38,
+    totalRow: 39,
+    totalAmtCol: 'G',
+    totalQtyCol: 'E',
+    saysTotalCell: 'A41',
+    paymentCell: 'A48',
+    bankCells: { name: 'B50', address: 'B51', account: 'B52', swift: 'B53' },
+    beneficiaryCells: { name: 'B54' },
+    productCells: { name: 'A45' },
+    headerFields: {
+      'A11': 'billName', 'A12': 'billAddr1', 'A13': 'billAddr2', 'A14': 'billCountry', 'A15': 'attn',
+      'E11': 'shipName', 'E12': 'shipAddr1', 'E13': 'shipAddr2', 'E14': 'shipCountry'
+    },
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' }
   },
   ci: {
@@ -566,16 +578,18 @@ const MASTER_TEMPLATE_DOC = {
   invoice: {
     sheetFile: 'xl/worksheets/sheet1.xml',
     invoiceNoCell: 'B18',        // Invoice No. value goes here (A18 has the prefix label)
-    dateCellRef: 'F18',          // Date goes here (has "Date :" prefix)
+    dateCellRef: 'G18',          // Date goes here (G18 has value; F18 has "Date :" prefix)
     cartonCellRef: null,
     dataStartRow: 21,
     footerRow: 38,               // Made in China row (first footer row)
     totalRow: 39,                // Total amount row
     totalAmtCol: 'G',            // G39 = Total Amount
     totalQtyCol: 'E',            // E39 = Total Qty
-    saysTotalCell: 'A41',        // "Says Total:" label; actual text goes in B41
-    saysTotalValueCell: 'B41',   // Says Total text value
+    saysTotalCell: 'A41',        // Contains SpellNumberToEnglish formula
     paymentCell: 'A48',          // Full payment terms text
+    bankCells: { name: 'B50', address: 'B51', account: 'B52', swift: 'B53' },
+    beneficiaryCells: { name: 'B54' },
+    productCells: { name: 'A45' },
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' }
   },
   ci: {
@@ -618,8 +632,27 @@ const CLIENT_CONFIGS = {
   VA: {
     label: 'VA Composites', code: 'VA',
     templateKey: 'VA',
-    hasCI: true, hasPL: true,
-    invoice: { ...UNIFIED_DOC.invoice },
+    hasCI: false, hasPL: false,
+    invoice: {
+      sheetFile: 'xl/worksheets/sheet1.xml',
+      invoiceNoCell: 'B18',
+      dateCellRef: 'F18',
+      cartonCellRef: null,
+      dataStartRow: 23, footerRow: 45,
+      totalRow: 46,
+      totalAmtCol: 'F',
+      totalQtyCol: 'D',
+      saysTotalCell: 'A48',
+      paymentCell: 'A50',
+      bankCells: { name: 'B52', address: 'B53', account: 'B54' },
+      beneficiaryCells: { name: 'B55' },
+      productCells: { name: 'A45' },
+      headerFields: {
+        'A11': 'billName', 'A12': 'billAddr1', 'A13': 'billAddr2', 'A14': 'billCountry', 'A15': 'attn',
+        'E11': 'shipName', 'E12': 'shipAddr1', 'E13': 'shipAddr2', 'E14': 'shipCountry', 'E15': 'attn'
+      },
+      cols: { po:'A', itemCode:'B', nfItem:'C', qty:'D', unitPrice:'E', amount:'F' }
+    },
     ci: { ...UNIFIED_DOC.ci },
     pl: { ...MASTER_TEMPLATE_DOC.pl }
   },
@@ -641,7 +674,7 @@ const CLIENT_CONFIGS = {
   },
   PGCanada: {
     label: 'PG Canada', code: 'PGC',
-    templateKey: 'PGC',
+    templateKey: 'PG',
     hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
     ci: { ...UNIFIED_DOC.ci },
@@ -649,7 +682,7 @@ const CLIENT_CONFIGS = {
   },
   PGUS: {
     label: 'PG US', code: 'PGUS',
-    templateKey: 'PGUS',
+    templateKey: 'PG',
     hasCI: true, hasPL: true,
     invoice: { ...UNIFIED_DOC.invoice },
     ci: { ...UNIFIED_DOC.ci },
@@ -3234,7 +3267,8 @@ function applyTemplateEditorToSheet(sheetXml, ssStrings, clientKey, docType, doc
 
 function replaceSpellNumberFormulas(sheetXml, ssStrings, totalAmount, amountCol) {
   // Find cells containing SpellNumberToEnglish or NumberToWords formulas
-  const formulaRegex = /<c([^>]*)><f>(SpellNumberToEnglish|NumberToWords)\([A-Z]+\d+\)<\/f><\/c>/gi;
+  // Supports both "SpellNumberToEnglish(G39)" and "VBAProject.Module2.SpellNumberToEnglish(F46)"
+  const formulaRegex = /<c([^>]*)><f>(?:[A-Za-z0-9_]+\.)*(SpellNumberToEnglish|NumberToWords)\([A-Z]+\d+\)<\/f><\/c>/gi;
   
   // Replace with inline string containing the spelled-out amount
   const spelled = numberToWordsUSD(totalAmount);
@@ -3285,6 +3319,22 @@ function updateSumFormulas(sheetXml, amountCol, qtyCol, startRow, lastDataRow) {
 // Template fragments extracted from Master Template-no Flex.xlsx
 // ============================================================
 
+async function fetchTemplateFromGitHub(templateKey) {
+  try {
+    const url = `https://raw.githubusercontent.com/junisme123/neo-fiber-app/main/templates/${templateKey}-Template.xlsm`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
 async function downloadExcel() {
   const clientKey = state.selectedClient;
   if (!clientKey) { toast('Please select a client first.', 'error'); return; }
@@ -3305,8 +3355,11 @@ async function downloadExcel() {
     const invoiceNo = document.getElementById('invoiceNo')?.value || '';
     const invoiceDate = document.getElementById('invoiceDate')?.value || '';
 
-    // Build sheets from template
-    let templateB64 = TEMPLATES_B64[cfg.code] || TEMPLATES_B64[cfg._docKey] || MASTER_TEMPLATE_B64;
+    // Build sheets from template (fetch from GitHub first, fallback to embedded)
+    let templateB64 = await fetchTemplateFromGitHub(cfg.templateKey);
+    if (!templateB64) {
+      templateB64 = TEMPLATES_B64[cfg.code] || TEMPLATES_B64[cfg._docKey] || MASTER_TEMPLATE_B64;
+    }
     if (!templateB64) { toast('⚠ No Excel template found for this client.', 'error'); return; }
 
     const tmplData = atob(templateB64);
@@ -3394,9 +3447,18 @@ async function downloadExcel() {
     const poNo = document.getElementById('poNo')?.value || '';
     const terms = document.getElementById('paymentTerms')?.value || '';
     if (docCfg.headerFields) {
-      for (const [cell, val] of Object.entries(docCfg.headerFields)) {
-        sheetXml = setCellValue(sheetXml, ssStrings, cell, val, 'sharedStr');
+      const customerInfo = (loadCustomerInfo()[clientKey] || {});
+      for (const [cell, fieldName] of Object.entries(docCfg.headerFields)) {
+        const val = customerInfo[fieldName] || '';
+        if (val) sheetXml = setCellValue(sheetXml, ssStrings, cell, val, 'sharedStr');
       }
+    }
+    // Fill Invoice No. and Date
+    if (docCfg.invoiceNoCell && invNo) {
+      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.invoiceNoCell, invNo, 'sharedStr');
+    }
+    if (docCfg.dateCellRef && invDate) {
+      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.dateCellRef, invDate, 'sharedStr');
     }
 
     // Step 3: Fix footer formulas
@@ -3405,15 +3467,44 @@ async function downloadExcel() {
     sheetXml = sheetXml.replace(new RegExp(`SUM\\(${qtyCol}\\d+:${qtyCol}\\d+\\)`, 'g'), `SUM(${qtyCol}${dataStartRow}:${qtyCol}${lastDataRow})`);
     sheetXml = sheetXml.replace(new RegExp(`SUM\\(${amtCol}\\d+:${amtCol}\\d+\\)`, 'g'), `SUM(${amtCol}${dataStartRow}:${amtCol}${lastDataRow})`);
 
+    // Step 3a: Insert SUM formulas if template doesn't have them (e.g. KS/GS/TTJ/PG)
+    if (docCfg.totalRow) {
+      const hasSumFormula = sheetXml.includes('<f>SUM(');
+      if (!hasSumFormula) {
+        // Template has no SUM formulas at all; insert them at totalRow
+        if (docCfg.totalQtyCol) {
+          const qtyCellRef = docCfg.totalQtyCol + docCfg.totalRow;
+          const qtyFormula = `SUM(${qtyCol}${dataStartRow}:${qtyCol}${lastDataRow})`;
+          const qtyPattern = new RegExp(`<c r="${qtyCellRef}"([^>]*)>.*?</c>`);
+          const qtyMatch = sheetXml.match(qtyPattern);
+          if (qtyMatch) {
+            const sAttr = qtyMatch[1].match(/s="(\d+)"/) ? ` s="${qtyMatch[1].match(/s="(\d+)"/)[1]}"` : '';
+            sheetXml = sheetXml.replace(qtyPattern, `<c r="${qtyCellRef}"${sAttr}><f>${qtyFormula}</f></c>`);
+          }
+        }
+        if (docCfg.totalAmtCol) {
+          const amtCellRef = docCfg.totalAmtCol + docCfg.totalRow;
+          const amtFormula = `SUM(${amtCol}${dataStartRow}:${amtCol}${lastDataRow})`;
+          const amtPattern = new RegExp(`<c r="${amtCellRef}"([^>]*)>.*?</c>`);
+          const amtMatch = sheetXml.match(amtPattern);
+          if (amtMatch) {
+            const sAttr = amtMatch[1].match(/s="(\d+)"/) ? ` s="${amtMatch[1].match(/s="(\d+)"/)[1]}"` : '';
+            sheetXml = sheetXml.replace(amtPattern, `<c r="${amtCellRef}"${sAttr}><f>${amtFormula}</f></c>`);
+          }
+        }
+      }
+    }
+
     // Step 3b: Fill Says Total and Payment Terms
     const totalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
     if (docCfg.saysTotalCell) {
-      const spellText = numberToWordsUSD(totalAmt);
-      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.saysTotalCell, spellText, 'sharedStr');
+      // Use replaceSpellNumberFormulas to handle both standard and VBA-prefixed formulas
+      sheetXml = replaceSpellNumberFormulas(sheetXml, ssStrings, totalAmt, amtCol);
     }
-    if (docCfg.paymentTermsCell) {
+    const paymentCell = docCfg.paymentTermsCell || docCfg.paymentCell;
+    if (paymentCell) {
       const settings = getSettings();
-      sheetXml = setCellValue(sheetXml, ssStrings, docCfg.paymentTermsCell, settings.paymentTerms || 'By O/A 45 days', 'sharedStr');
+      sheetXml = setCellValue(sheetXml, ssStrings, paymentCell, settings.paymentTerms || 'By O/A 45 days', 'sharedStr');
     }
 
     // Step 3c: Fill Bank Info and Beneficiary from global settings
@@ -3439,7 +3530,7 @@ async function downloadExcel() {
     zip.file('xl/worksheets/sheet1.xml', sheetXml);
 
     // Step 5: Build CI sheet
-    if (cfg.hasCI) {
+    if (cfg.hasCI && zip.file('xl/worksheets/sheet2.xml')) {
       let ciXml = await zip.file('xl/worksheets/sheet2.xml').async('string');
       const ciCfg = cfg.ci;
       const ciCols = { ...getEffectiveCols(clientKey, 'ci', ciCfg.cols) };
