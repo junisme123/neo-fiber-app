@@ -12335,6 +12335,7 @@ function buildCashFlowForecastRows(clientKey) {
   const planRows = [];
 
   (spPlans[clientKey] || []).forEach(p => {
+    p._clientKey = clientKey;
     const unitPrice = getOrderUnitPrice(p);
     if (unitPrice <= 0) return;
 
