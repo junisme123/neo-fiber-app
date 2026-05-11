@@ -13027,6 +13027,7 @@ function getOrderUnitPrice(plan) {
 
   // 2. Price Database — try multiple client keys and aliases
   const pItem = (plan.itemCode || '').toString().trim().toUpperCase();
+  const pPgCode = (plan.pgCode || '').toString().trim().toUpperCase();
   const cfg = CLIENT_CONFIGS[ck2] || {};
   const clientCode = cfg.code || ck2;
   const clientLabel = cfg.label || ck2;
@@ -13052,7 +13053,9 @@ function getOrderUnitPrice(plan) {
     if (db.items) {
       const match = db.items.find(item =>
         (item.customerCode || '').toUpperCase() === pItem ||
-        (item.itemCode || '').toUpperCase() === pItem
+        (item.itemCode || '').toUpperCase() === pItem ||
+        (pPgCode && (item.customerCode || '').toUpperCase() === pPgCode) ||
+        (pItem && (item.nfItem || '').toUpperCase() === pItem)
       );
       if (match && match.price > 0) return match.price;
     }
