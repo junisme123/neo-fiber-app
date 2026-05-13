@@ -3442,86 +3442,91 @@ async function downloadExcel() {
     const numDataRows = rows.length;
     const isCustomClient = clientKey.startsWith('custom_');
 
-    // Step 1a: For custom clients, ensure all required data rows exist in XML
-    // If the template only has 1 pre-allocated row but user has more data rows,
-    // we need to clone the template row and insert new rows.
-    if (isCustomClient && numDataRows > 1) {
-      // Find which rows already exist in the sheet XML
-      const existingRowNums = new Set();
-      const rowScanPre = /<row[^>]*\sr="(\d+)"/g;
-      let mPre;
-      while ((mPre = rowScanPre.exec(sheetXml)) !== null) {
-        existingRowNums.add(parseInt(mPre[1]));
-      }
+    // Step 1a: Ensure all required data rows exist (all clients)
+    // The template has (footerRow - startRow) pre-allocated data rows.
+    // If more are needed, clone and insert before the footer, then shift footer down.
+    const preAllocated = footerRow - startRow;
+    if (numDataRows > preAllocated) {
+      const extraRows = numDataRows - preAllocated;
 
-      // Find the template row (dataStartRow) to clone for new rows
-      const templateRowNum = startRow;
-      // Use a flexible regex that matches r="N" anywhere in the row tag attributes
-      const templateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${templateRowNum}"([^>]*)>([\\s\\S]*?)<\/row>`);
+      // Find the first data row to clone
+      const templateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${startRow}"([^>]*)>([\\s\\S]*?)<\/row>`);
       const templateRowMatch = sheetXml.match(templateRowPat);
 
       if (templateRowMatch) {
-        // Build new rows for rows that don't exist yet
         const newRowsHtml = [];
-        for (let i = 1; i < numDataRows; i++) {
+        for (let i = preAllocated; i < numDataRows; i++) {
           const newRowNum = startRow + i;
-          if (!existingRowNums.has(newRowNum)) {
-            // Clone template row with updated row number and empty cell values
-            let newRowXml = templateRowMatch[0]
-              // Update row r attribute (handles both " r="N"" and "<row r="N"")
-              .replace(new RegExp(`\\br="${templateRowNum}"`), `r="${newRowNum}"`)
-              // Update all cell refs (e.g. A22 -> A23)
-              .replace(new RegExp(`r="([A-Z]+)${templateRowNum}"`, 'g'), `r="$1${newRowNum}"`)
-              // Clear all cell values (keep style)
-              .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
-                (m, attrs) => {
-                  // Remove t attribute and clear value
-                  const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
-                  return `<c${cleanAttrs}></c>`;
-                });
-            newRowsHtml.push(newRowXml);
-          }
+          let newRowXml = templateRowMatch[0]
+            .replace(new RegExp(`\\br="${startRow}"`), `r="${newRowNum}"`)
+            .replace(new RegExp(`r="([A-Z]+)${startRow}"`, 'g'), `r="$1${newRowNum}"`)
+            .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
+              (m, attrs) => {
+                const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
+                return `<c${cleanAttrs}></c>`;
+              });
+          newRowsHtml.push(newRowXml);
         }
 
-        // Insert new rows after the template row
-        if (newRowsHtml.length > 0) {
-          const insertAfter = templateRowMatch[0];
-          sheetXml = sheetXml.replace(insertAfter, insertAfter + newRowsHtml.join(''));
-          
-          // For Master Template: shift footer rows down by the number of extra rows inserted
-          // The template has (footerRow - dataStartRow) pre-allocated rows
-          // If numDataRows > preAllocated, we inserted (numDataRows - preAllocated) extra rows
-          const preAllocated = footerRow - startRow; // e.g. 38-21 = 17
-          const extraRows = newRowsHtml.length; // rows inserted beyond pre-allocated
-          if (extraRows > 0 && docCfg.saysTotalCell) {
-            // Shift all rows >= footerRow down by extraRows
-            const footerRowNums = [];
-            const footerScan = /<row[^>]*\sr="(\d+)"/g;
-            let fMatch;
-            while ((fMatch = footerScan.exec(sheetXml)) !== null) {
-              const rn = parseInt(fMatch[1]);
-              if (rn >= footerRow) footerRowNums.push(rn);
-            }
-            footerRowNums.sort((a, b) => b - a); // descending
-            for (const oldRow of footerRowNums) {
-              const newRow = oldRow + extraRows;
-              sheetXml = sheetXml.replace(
-                new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'),
-                '$1r="' + newRow + '"'
-              );
-              sheetXml = sheetXml.replace(
-                new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'),
-                'r="$1' + newRow + '"'
-              );
-            }
-            // Update docCfg footer references dynamically
-            // We need to update the footerRow and related cells for this render
-            // Store the offset in a local variable for use in Step 3b/3c
-            docCfg._footerOffset = (docCfg._footerOffset || 0) + extraRows;
-          }
+        // Insert new rows before the footer row
+        const footerRowPat = new RegExp(`<row\\b([^>]*?)\\br="${footerRow}"([^>]*)>`);
+        const footerRowMatch = sheetXml.match(footerRowPat);
+        if (footerRowMatch) {
+          sheetXml = sheetXml.replace(footerRowMatch[0], newRowsHtml.join('') + footerRowMatch[0]);
+        } else {
+          // Fallback: insert after the last pre-allocated data row
+          const lastPreRow = footerRow - 1;
+          const lastPreRowPat = new RegExp(`(<row\\b([^>]*?)\\br="${lastPreRow}"([^>]*)>[\\s\\S]*?<\/row>)`);
+          sheetXml = sheetXml.replace(lastPreRowPat, '$1' + newRowsHtml.join(''));
         }
+
+        // Shift all rows >= footerRow DOWN by extraRows (map-based single pass)
+        const footerRowNums = [];
+        const footerScan = /<row[^>]*\sr="(\d+)"/g;
+        let fMatch;
+        while ((fMatch = footerScan.exec(sheetXml)) !== null) {
+          const rn = parseInt(fMatch[1]);
+          if (rn >= footerRow) footerRowNums.push(rn);
+        }
+        const shiftDownMap = {};
+        for (const oldRow of footerRowNums) {
+          shiftDownMap[oldRow] = oldRow + extraRows;
+        }
+        const allShiftRows = footerRowNums.join('|');
+        if (allShiftRows) {
+          sheetXml = sheetXml.replace(
+            new RegExp(`(<row[^>]*\\s)r="(${allShiftRows})"`, 'g'),
+            (m, pre, rn) => `${pre}r="${shiftDownMap[parseInt(rn)]}"`
+          );
+          sheetXml = sheetXml.replace(
+            new RegExp(`r="([A-Z]+)(${allShiftRows})"`, 'g'),
+            (m, col, rn) => `r="${col}${shiftDownMap[parseInt(rn)]}"`
+          );
+        }
+
+        // Store offset for Steps 3b/3c
+        docCfg._footerOffset = (docCfg._footerOffset || 0) + extraRows;
+
+        // Update dimension
+        sheetXml = sheetXml.replace(
+          /<dimension ref="([^"]+)"\/>/,
+          (match, ref) => {
+            const parts = ref.split(':');
+            if (parts.length === 2) {
+              const endRowMatch = parts[1].match(/\d+/);
+              if (endRowMatch) {
+                const endRow = parseInt(endRowMatch[0]);
+                const newEnd = parts[1].replace(/\d+/, String(endRow + extraRows));
+                return `<dimension ref="${parts[0]}:${newEnd}"/>`;
+              }
+            }
+            return match;
+          }
+        );
       }
     }
+
+    // If fewer rows than pre-allocated, we'll handle surplus deletion in Step 2
 
     // Step 1b: Write data into rows startRow … startRow+numDataRows-1
     rows.forEach((row, i) => {
@@ -3748,37 +3753,84 @@ async function downloadExcel() {
 
       if (!ciIndexMode) {
         // Standard mode: manually write data into CI rows
-        // Step 5a-pre: Ensure all required CI data rows exist (clone template row if needed)
-        if (isCustomClient && numDataRows > 1) {
-          const ciExistingRowNums = new Set();
-          const ciRowScanPre = /<row[^>]*\sr="(\d+)"/g;
-          let ciMPre;
-          while ((ciMPre = ciRowScanPre.exec(ciXml)) !== null) {
-            ciExistingRowNums.add(parseInt(ciMPre[1]));
-          }
-          const ciTemplateRowNum = ciStartRow;
-          // Use flexible regex that matches r="N" anywhere in the row tag attributes
-          const ciTemplateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${ciTemplateRowNum}"([^>]*)>([\\s\\S]*?)<\/row>`);
+        // Step 5a-pre: Ensure all required CI data rows exist (all clients)
+        // The CI template has (ciFooterRow - ciStartRow) pre-allocated data rows.
+        // If more are needed, clone and insert before the footer, then shift footer down.
+        const ciPreAllocated = ciFooterRow - ciStartRow;
+        if (numDataRows > ciPreAllocated) {
+          const ciExtraRows = numDataRows - ciPreAllocated;
+
+          const ciTemplateRowPat = new RegExp(`<row\\b([^>]*?)\\br="${ciStartRow}"([^>]*)>([\\s\\S]*?)<\/row>`);
           const ciTemplateRowMatch = ciXml.match(ciTemplateRowPat);
+
           if (ciTemplateRowMatch) {
             const ciNewRowsHtml = [];
-            for (let i = 1; i < numDataRows; i++) {
+            for (let i = ciPreAllocated; i < numDataRows; i++) {
               const newRowNum = ciStartRow + i;
-              if (!ciExistingRowNums.has(newRowNum)) {
-                let newRowXml = ciTemplateRowMatch[0]
-                  .replace(new RegExp(`\\br="${ciTemplateRowNum}"`), `r="${newRowNum}"`)
-                  .replace(new RegExp(`r="([A-Z]+)${ciTemplateRowNum}"`, 'g'), `r="$1${newRowNum}"`)
-                  .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
-                    (m, attrs) => {
-                      const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
-                      return `<c${cleanAttrs}></c>`;
-                    });
-                ciNewRowsHtml.push(newRowXml);
+              let newRowXml = ciTemplateRowMatch[0]
+                .replace(new RegExp(`\\br="${ciStartRow}"`), `r="${newRowNum}"`)
+                .replace(new RegExp(`r="([A-Z]+)${ciStartRow}"`, 'g'), `r="$1${newRowNum}"`)
+                .replace(/<c([^>]*?)(?:\s+t="[^"]*")?>((?:<[fv][^>]*>.*?<\/[fv]>|<is>.*?<\/is>)*)<\/c>/g,
+                  (m, attrs) => {
+                    const cleanAttrs = attrs.replace(/\s+t="[^"]*"/, '');
+                    return `<c${cleanAttrs}></c>`;
+                  });
+              ciNewRowsHtml.push(newRowXml);
+            }
+
+            // Insert new rows before the CI footer row
+            const ciFooterRowPat = new RegExp(`<row\\b([^>]*?)\\br="${ciFooterRow}"([^>]*)>`);
+            const ciFooterRowMatch = ciXml.match(ciFooterRowPat);
+            if (ciFooterRowMatch) {
+              ciXml = ciXml.replace(ciFooterRowMatch[0], ciNewRowsHtml.join('') + ciFooterRowMatch[0]);
+            } else {
+              const ciLastPreRow = ciFooterRow - 1;
+              const ciLastPreRowPat = new RegExp(`(<row\\b([^>]*?)\\br="${ciLastPreRow}"([^>]*)>[\\s\\S]*?<\/row>)`);
+              ciXml = ciXml.replace(ciLastPreRowPat, '$1' + ciNewRowsHtml.join(''));
+            }
+
+            // Shift all rows >= ciFooterRow DOWN by ciExtraRows (map-based single pass)
+            const ciFooterRowNums = [];
+            const ciFooterScan = /<row[^>]*\sr="(\d+)"/g;
+            let ciFMatch;
+            while ((ciFMatch = ciFooterScan.exec(ciXml)) !== null) {
+              const rn = parseInt(ciFMatch[1]);
+              if (rn >= ciFooterRow) ciFooterRowNums.push(rn);
+            }
+            const ciShiftDownMap = {};
+            for (const oldRow of ciFooterRowNums) {
+              ciShiftDownMap[oldRow] = oldRow + ciExtraRows;
+            }
+            const ciAllShiftRows = ciFooterRowNums.join('|');
+            if (ciAllShiftRows) {
+              ciXml = ciXml.replace(
+                new RegExp(`(<row[^>]*\\s)r="(${ciAllShiftRows})"`, 'g'),
+                (m, pre, rn) => `${pre}r="${ciShiftDownMap[parseInt(rn)]}"`
+              );
+              ciXml = ciXml.replace(
+                new RegExp(`r="([A-Z]+)(${ciAllShiftRows})"`, 'g'),
+                (m, col, rn) => `r="${col}${ciShiftDownMap[parseInt(rn)]}"`
+              );
+            }
+
+            ciCfg._footerOffset = (ciCfg._footerOffset || 0) + ciExtraRows;
+
+            // Update dimension
+            ciXml = ciXml.replace(
+              /<dimension ref="([^"]+)"\/>/,
+              (match, ref) => {
+                const parts = ref.split(':');
+                if (parts.length === 2) {
+                  const endRowMatch = parts[1].match(/\d+/);
+                  if (endRowMatch) {
+                    const endRow = parseInt(endRowMatch[0]);
+                    const newEnd = parts[1].replace(/\d+/, String(endRow + ciExtraRows));
+                    return `<dimension ref="${parts[0]}:${newEnd}"/>`;
+                  }
+                }
+                return match;
               }
-            }
-            if (ciNewRowsHtml.length > 0) {
-              ciXml = ciXml.replace(ciTemplateRowMatch[0], ciTemplateRowMatch[0] + ciNewRowsHtml.join(''));
-            }
+            );
           }
         }
 
