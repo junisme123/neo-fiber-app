@@ -3577,20 +3577,22 @@ async function downloadExcel() {
       }
       allRowNums.sort((a, b) => b - a); // descending to avoid conflicts
 
+      // Build row-number shift map (old→new) to avoid double-replacement
+      const rowShiftMap = {};
       for (const oldRow of allRowNums) {
-        const newRow = oldRow - rowsToRemove;
-        // Replace row r attribute
-        sheetXml = sheetXml.replace(
-          new RegExp(`(<row[^>]*\\s)r="${oldRow}"`, 'g'),
-          `$1r="${newRow}"`
-        );
-        // Replace all cell references in this row (e.g. A42 -> A30)
-        // Match cell refs like r="A42" or r="AB42"
-        sheetXml = sheetXml.replace(
-          new RegExp(`r="([A-Z]+)${oldRow}"`, 'g'),
-          `r="$1${newRow}"`
-        );
+        rowShiftMap[oldRow] = oldRow - rowsToRemove;
       }
+      const allOldRows = allRowNums.join('|');
+      // Replace row r attributes in a single pass
+      sheetXml = sheetXml.replace(
+        new RegExp(`(<row[^>]*\\s)r="(${allOldRows})"`, 'g'),
+        (m, pre, rn) => `${pre}r="${rowShiftMap[parseInt(rn)]}"`
+      );
+      // Replace ALL cell references in a single pass (avoids double-shifting)
+      sheetXml = sheetXml.replace(
+        new RegExp(`r="([A-Z]+)(${allOldRows})"`, 'g'),
+        (m, col, rn) => `r="${col}${rowShiftMap[parseInt(rn)]}"`
+      );
 
       // Also update <dimension ref="A1:G42"> if present
       sheetXml = sheetXml.replace(
@@ -3816,17 +3818,22 @@ async function downloadExcel() {
           }
           ciAllRowNums.sort((a, b) => b - a);
 
+          // Build row-number shift map (old→new) to avoid double-replacement
+          const ciRowShiftMap = {};
           for (const oldRow of ciAllRowNums) {
-            const newRow = oldRow - ciRowsToRemove;
-            ciXml = ciXml.replace(
-              new RegExp('(<row[^>]*\\s)r="' + oldRow + '"', 'g'),
-              '$1r="' + newRow + '"'
-            );
-            ciXml = ciXml.replace(
-              new RegExp('r="([A-Z]+)' + oldRow + '"', 'g'),
-              'r="$1' + newRow + '"'
-            );
+            ciRowShiftMap[oldRow] = oldRow - ciRowsToRemove;
           }
+          const ciAllOldRows = ciAllRowNums.join('|');
+          // Replace row r attributes in a single pass
+          ciXml = ciXml.replace(
+            new RegExp('(<row[^>]*\\s)r="(' + ciAllOldRows + ')"', 'g'),
+            (m, pre, rn) => `${pre}r="${ciRowShiftMap[parseInt(rn)]}"`
+          );
+          // Replace ALL cell references in a single pass (avoids double-shifting)
+          ciXml = ciXml.replace(
+            new RegExp('r="([A-Z]+)(' + ciAllOldRows + ')"', 'g'),
+            (m, col, rn) => `r="${col}${ciRowShiftMap[parseInt(rn)]}"`
+          );
 
           // Update dimension
           ciXml = ciXml.replace(
