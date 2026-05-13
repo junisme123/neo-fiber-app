@@ -1081,8 +1081,7 @@ const MASTER_TEMPLATE_DOC = {
     totalRow: 39,                // Total amount row
     totalAmtCol: 'G',            // G39 = Total Amount
     totalQtyCol: 'E',            // E39 = Total Qty
-    saysTotalCell: 'A41',        // "Says Total:" label; actual text goes in B41
-    saysTotalValueCell: 'B41',   // Says Total text value
+    saysTotalCell: 'A41',        // Generated number-to-words text replaces the label
     paymentCell: 'A48',          // Full payment terms text
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' }
   },
@@ -3285,28 +3284,28 @@ function escapeXml(str) {
 
 // Convert a USD amount to English words (for Says Total)
 function numberToWordsUSD(amount) {
-  const ones = ['', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE',
-                'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN',
-                'SEVENTEEN', 'EIGHTEEN', 'NINETEEN'];
-  const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY'];
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+                'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+                'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
 
   function spellBelow1000(n) {
     if (n === 0) return '';
     if (n < 20) return ones[n];
     if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
-    return ones[Math.floor(n / 100)] + ' HUNDRED' + (n % 100 ? ' ' + spellBelow1000(n % 100) : '');
+    return ones[Math.floor(n / 100)] + ' Hundred' + (n % 100 ? ' ' + spellBelow1000(n % 100) : '');
   }
 
   function spellInteger(n) {
-    if (n === 0) return 'ZERO';
+    if (n === 0) return 'No';
     let result = '';
     if (n >= 1000000) {
-      result += spellBelow1000(Math.floor(n / 1000000)) + ' MILLION';
+      result += spellBelow1000(Math.floor(n / 1000000)) + ' Million';
       n %= 1000000;
       if (n > 0) result += ' ';
     }
     if (n >= 1000) {
-      result += spellBelow1000(Math.floor(n / 1000)) + ' THOUSAND';
+      result += spellBelow1000(Math.floor(n / 1000)) + ' Thousand';
       n %= 1000;
       if (n > 0) result += ' ';
     }
@@ -3318,11 +3317,11 @@ function numberToWordsUSD(amount) {
   const dollars = Math.floor(rounded);
   const cents = Math.round((rounded - dollars) * 100);
 
-  let result = 'SAY US DOLLARS ' + spellInteger(dollars);
+  let result = 'Say U.S. Dollars ' + spellInteger(dollars);
   if (cents > 0) {
-    result += ' AND CENTS ' + spellInteger(cents);
+    result += ' and Cents ' + spellInteger(cents);
   }
-  result += ' ONLY';
+  result += ' Only';
   return result;
 }
 
