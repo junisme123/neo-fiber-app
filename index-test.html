@@ -3607,6 +3607,9 @@ async function downloadExcel() {
           return match;
         }
       );
+        // After rows are deleted and footer shifted UP, adjust cell references
+        // so Steps 3b/3c target the correct shifted positions
+        docCfg._footerOffset = -rowsToRemove;
       } // end else (built-in client)
     } // end if (rowsToRemove > 0)
 
@@ -3659,15 +3662,27 @@ async function downloadExcel() {
       sheetXml = setCellValue(sheetXml, ssStrings, paymentCell, custInfo.payment, 'inlineStr');
     }
 
-    // Step 3c: Fill Total row for ALL clients
+    // Step 3c: Fill Total row with SUM formulas for ALL clients
     if (docCfg.totalRow) {
       const masterTotalRow = docCfg.totalRow + _footerOffset;
       // Use updated cols after flex deletion, fallback to docCfg config
       const amtColLetter = cols.amount || docCfg.totalAmtCol || 'G';
       const qtyColLetter = cols.qty || docCfg.totalQtyCol || 'E';
-      sheetXml = setCellValue(sheetXml, ssStrings, amtColLetter + masterTotalRow, String(_totalAmt.toFixed(2)), 'number');
+      // Amount total with SUM formula
+      const amtCell = amtColLetter + masterTotalRow;
+      sheetXml = setCellValue(sheetXml, ssStrings, amtCell, String(_totalAmt.toFixed(2)), 'number');
+      sheetXml = sheetXml.replace(
+        new RegExp(`(<c r="${amtCell}"[^>]*>)<v>`),
+        `$1<f>SUM(${amtColLetter}${startRow}:${amtColLetter}${lastDataRow})</f><v>`
+      );
+      // Qty total with SUM formula
       if (qtyColLetter !== amtColLetter) {
-        sheetXml = setCellValue(sheetXml, ssStrings, qtyColLetter + masterTotalRow, String(_totalQty), 'number');
+        const qtyCell = qtyColLetter + masterTotalRow;
+        sheetXml = setCellValue(sheetXml, ssStrings, qtyCell, String(_totalQty), 'number');
+        sheetXml = sheetXml.replace(
+          new RegExp(`(<c r="${qtyCell}"[^>]*>)<v>`),
+          `$1<f>SUM(${qtyColLetter}${startRow}:${qtyColLetter}${lastDataRow})</f><v>`
+        );
       }
     }
 
@@ -3832,6 +3847,8 @@ async function downloadExcel() {
             }
           );
         }
+        // After CI rows are deleted and footer shifted UP, adjust cell references
+        ciCfg._footerOffset = -ciRowsToRemove;
 
         // Step 5c: Fix CI SUM formulas
         const ciLastDataRow = ciStartRow + numDataRows - 1;
@@ -3877,14 +3894,25 @@ async function downloadExcel() {
         const adjustedCell = targetCell.replace(/(\d+)$/, n => String(parseInt(n) + _ciFooterOffset));
         ciXml = setCellValue(ciXml, ssStrings, adjustedCell, saysTotalText, 'inlineStr');
       }
-      // Fill CI Total cell
+      // Fill CI Total cell with SUM formula
       if (ciCfg.totalRow) {
         const ciTotalRow = ciCfg.totalRow + _ciFooterOffset;
         const ciAmtColLetter2 = ciCols.amount || ciCfg.totalAmtCol || 'G'; // ciCols.amount is updated after flex deletion
         const ciQtyColLetter2 = ciCfg.totalQtyCol; // null means don't fill qty
-        ciXml = setCellValue(ciXml, ssStrings, ciAmtColLetter2 + ciTotalRow, String(_ciTotalAmt.toFixed(2)), 'number');
+        const ciLastRow = ciStartRow + numDataRows - 1;
+        const ciAmtCell = ciAmtColLetter2 + ciTotalRow;
+        ciXml = setCellValue(ciXml, ssStrings, ciAmtCell, String(_ciTotalAmt.toFixed(2)), 'number');
+        ciXml = ciXml.replace(
+          new RegExp(`(<c r="${ciAmtCell}"[^>]*>)<v>`),
+          `$1<f>SUM(${ciAmtColLetter2}${ciStartRow}:${ciAmtColLetter2}${ciLastRow})</f><v>`
+        );
         if (ciQtyColLetter2 && ciQtyColLetter2 !== ciAmtColLetter2) {
-          ciXml = setCellValue(ciXml, ssStrings, ciQtyColLetter2 + ciTotalRow, String(_ciTotalQty), 'number');
+          const ciQtyCell = ciQtyColLetter2 + ciTotalRow;
+          ciXml = setCellValue(ciXml, ssStrings, ciQtyCell, String(_ciTotalQty), 'number');
+          ciXml = ciXml.replace(
+            new RegExp(`(<c r="${ciQtyCell}"[^>]*>)<v>`),
+            `$1<f>SUM(${ciQtyColLetter2}${ciStartRow}:${ciQtyColLetter2}${ciLastRow})</f><v>`
+          );
         }
       }
 
