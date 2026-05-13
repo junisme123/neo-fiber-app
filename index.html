@@ -1095,8 +1095,6 @@ const MASTER_TEMPLATE_DOC = {
     totalRow: 60,
     totalAmtCol: 'G',            // G60 = Total Amount (D60 has "Total" label)
     totalQtyCol: null,           // D60 has "Total" label, do NOT overwrite it
-    saysTotalCell: 'A62',        // "Says Total:" label; actual text goes in B62
-    saysTotalValueCell: 'B62',   // Says Total text value
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' }
   }
 };
@@ -3891,16 +3889,10 @@ async function downloadExcel() {
       // No need to fill data rows - they auto-update from Invoice sheet
       // Only Invoice No, Date, and customer info need to be filled (done above/below)
 
-      // Step 5c2: Fill CI Says Total and Total row for ALL clients
+      // Step 5c2: Fill CI Total row for ALL clients (CI does NOT have Say Total)
       const _ciTotalAmt = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
       const _ciTotalQty = rows.reduce((sum, r) => sum + (parseFloat(r.qty) || 0), 0);
       const _ciFooterOffset = ciCfg._footerOffset || 0;
-      if (ciCfg.saysTotalCell) {
-        const saysTotalText = numberToWordsUSD(_ciTotalAmt);
-        const targetCell = ciCfg.saysTotalValueCell || ciCfg.saysTotalCell;
-        const adjustedCell = targetCell.replace(/(\d+)$/, n => String(parseInt(n) + _ciFooterOffset));
-        ciXml = setCellValue(ciXml, ssStrings, adjustedCell, saysTotalText, 'inlineStr');
-      }
       // Fill CI Total cell with SUM formula
       if (ciCfg.totalRow) {
         const ciTotalRow = ciCfg.totalRow + _ciFooterOffset;
