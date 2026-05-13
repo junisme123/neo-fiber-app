@@ -4150,10 +4150,7 @@ async function downloadExcel() {
     });
 
     const safeInv = invoiceNo.replace(/[\/\\#\s]/g, '_');
-    const defaultName = `${cfg.code}_INVOICE_CI_${safeInv}`;
-    const userFileName = await promptFileName(defaultName, 'xlsx');
-    if (userFileName === null) return; // user cancelled
-    const filename = userFileName + '.xlsx';
+    const filename = `${cfg.code}_INVOICE_CI_${safeInv}.xlsx`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
