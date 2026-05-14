@@ -3983,6 +3983,37 @@ async function downloadExcel() {
         ciXml = setCellValue(ciXml, ssStrings, ciAdjustedCell, ciSaysTotalText, 'inlineStr');
       }
 
+
+      // Remove empty spacer row (template row 89) between Say Total and footer rows
+      {
+        const spacerTemplateRow = 89;
+        const spacerShiftedRow = spacerTemplateRow + _ciFooterOffset;
+        const spacerRowPat = new RegExp('<row[^>]*\\sr="' + spacerShiftedRow + '"[^>]*>[\\s\\S]*?<\\/row>', 'g');
+        ciXml = ciXml.replace(spacerRowPat, '');
+        const spacerAboveNums = [];
+        const spacerScan = /<row[^>]*\sr="(\d+)"/g;
+        let sm;
+        while ((sm = spacerScan.exec(ciXml)) !== null) {
+          const rn = parseInt(sm[1]);
+          if (rn > spacerShiftedRow) spacerAboveNums.push(rn);
+        }
+        spacerAboveNums.sort((a, b) => a - b);
+        const spacerShiftMap = {};
+        for (const oldRow of spacerAboveNums) { spacerShiftMap[oldRow] = oldRow - 1; }
+        const spacerAllAbove = spacerAboveNums.join('|');
+        if (spacerAllAbove) {
+          ciXml = ciXml.replace(
+            new RegExp('(<row[^>]*\\s)r="(' + spacerAllAbove + ')"', 'g'),
+            (m, pre, rn) => pre + 'r="' + spacerShiftMap[parseInt(rn)] + '"'
+          );
+          ciXml = ciXml.replace(
+            new RegExp('r="([A-Z]+)(' + spacerAllAbove + ')"', 'g'),
+            (m, col, rn) => 'r="' + col + spacerShiftMap[parseInt(rn)] + '"'
+          );
+        }
+        _ciFooterOffset = _ciFooterOffset - 1;
+      }
+
       // Step 5c3: Fill CI static footer rows (Product Name, HS Code, Material, Made in China)
       if (ciCfg.footerRows && ciCfg.footerRows.length > 0) {
         for (const fr of ciCfg.footerRows) {
