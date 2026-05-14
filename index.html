@@ -5139,7 +5139,7 @@ function renderCustomerInfo() {
     const key = 'custom_' + cc.code;
     return `<button class="db-tab ${key === currentCustClient ? 'active' : ''}" onclick="switchCustClient('${key}')">${cc.code}</button>`;
   }).join('');
-  tabs.innerHTML = builtInTabs + (customTabs ? '<span style="margin:0 6px;opacity:0.3">|</span>' + customTabs : '');
+  tabs.innerHTML = builtInTabs + (customTabs ? '<span style="margin:0 6px;opacity:0.3">|</span>' + customTabs : '') + ' <button class="db-tab" onclick="showQuickAddCustomer()" style="border:1px dashed var(--border);opacity:0.7;font-size:14px" title="Add New Customer">+ Add</button>';
   renderCustInfoForm();
 }
 
@@ -5268,6 +5268,41 @@ function resetCustInfo(key) {
   saveCustomerInfo(customerInfo);
   renderCustInfoForm();
   toast('Reset to default', 'info');
+}
+
+// Quick Add Customer — inline modal for Customer Info tab
+function showQuickAddCustomer() {
+  document.getElementById('qac_code').value = '';
+  document.getElementById('qac_name').value = '';
+  document.getElementById('quickAddCustomerModal').style.display = '';
+}
+
+function closeQuickAddCustomer() {
+  document.getElementById('quickAddCustomerModal').style.display = 'none';
+}
+
+function saveQuickAddCustomer() {
+  const code = document.getElementById('qac_code').value.trim().toUpperCase();
+  const name = document.getElementById('qac_name').value.trim();
+  if (!code || !name) { toast('Code and Name are required', 'error'); return; }
+  if (CLIENT_CONFIGS[code]) { toast('Code "' + code + '" is reserved for a built-in client', 'error'); return; }
+  if (customClients.find(c => c.code === code)) { toast('Code "' + code + '" already exists', 'error'); return; }
+
+  customClients.push({
+    code, name,
+    billName: '', billAddr1: '', billAddr2: '', billAddr3: '', billCountry: '',
+    shipName: '', shipAddr1: '', shipAddr2: '', shipAddr3: '', shipCountry: '',
+    payment: '', attn: '', paymentDays: 45, tbdMonths: 6,
+    hasCI: true, defaultTemplate: 'auto',
+    priceList: [],
+    templateB64: null, templateConfig: null
+  });
+  saveCustomClients(customClients);
+  buildCustomerGrid();
+  currentCustClient = 'custom_' + code;
+  renderCustomerInfo();
+  closeQuickAddCustomer();
+  toast('✓ Customer added: ' + code, 'success');
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -14970,6 +15005,24 @@ function parseExcelDate(val) {
   </div>
 </div>
 
+
+<!-- Quick Add Customer Modal -->
+<div id="quickAddCustomerModal" class="modal-overlay" style="display:none">
+  <div class="modal-content" style="max-width:400px">
+    <div class="modal-header">
+      <h3>+ Add New Customer</h3>
+      <button class="modal-close" onclick="closeQuickAddCustomer()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="info-field"><label>Customer Code <span style="color:var(--danger)">*</span></label><input type="text" id="qac_code" placeholder="e.g. ABC" style="width:100%"></div>
+      <div class="info-field" style="margin-top:8px"><label>Customer Name <span style="color:var(--danger)">*</span></label><input type="text" id="qac_name" placeholder="e.g. ABC Company Ltd" style="width:100%"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-outline" onclick="closeQuickAddCustomer()">Cancel</button>
+        <button class="btn btn-success" onclick="saveQuickAddCustomer()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 <!-- Price Selector Modal -->
 <div id="priceModal" class="modal-overlay">
   <div class="modal-content">
