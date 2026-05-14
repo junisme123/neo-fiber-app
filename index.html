@@ -1094,6 +1094,7 @@ const MASTER_TEMPLATE_DOC = {
     totalRow: 87,
     totalAmtCol: 'G',            // G87 = Total Amount (D86 has "Total" label)
     totalQtyCol: 'E',            // E87 = Total Qty
+    saysTotalCell: 'A88',        // Generated number-to-words text replaces the label
     cols: { po:'A', itemCode:'B', flex:'C', nfItem:'D', qty:'E', unitPrice:'F', amount:'G' },
     // Static footer rows below Total (rows 86-87) — each on its own line
     footerRows: [
@@ -3974,15 +3975,12 @@ async function downloadExcel() {
       }
 
 
-      // Clear "Says Total:" label from CI (template row 88 - Invoice concept, not needed on CI)
-      {
-        const ciSaysTotalOrigRow = 88;
-        const ciSaysTotalRow = ciSaysTotalOrigRow + _ciFooterOffset;
-        const ciSaysTotalCellRef = 'A' + ciSaysTotalRow;
-        ciXml = ciXml.replace(
-          new RegExp('<c r="' + ciSaysTotalCellRef + '"[^>]*>[^]*?</c>', 'g'),
-          '<c r="' + ciSaysTotalCellRef + '" s="1"/>'
-        );
+      // Step 5c2b: Fill CI Say Total (same rule as Invoice - number to words)
+      if (ciCfg.saysTotalCell) {
+        const ciSaysTotalText = numberToWordsUSD(_ciTotalAmt);
+        const ciTargetCell = ciCfg.saysTotalValueCell || ciCfg.saysTotalCell;
+        const ciAdjustedCell = ciTargetCell.replace(/(\d+)$/, n => String(parseInt(n) + _ciFooterOffset));
+        ciXml = setCellValue(ciXml, ssStrings, ciAdjustedCell, ciSaysTotalText, 'inlineStr');
       }
 
       // Step 5c3: Fill CI static footer rows (Product Name, HS Code, Material, Made in China)
