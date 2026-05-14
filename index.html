@@ -5084,6 +5084,38 @@ async function uploadPriceList(event) {
       savePriceDB(priceDB);
       renderPriceDB();
       toast(`✓ Imported ${items.length} items for ${currentDbClient}`, 'success');
+
+      // Sync new items to current order if client matches
+      if (state.selectedClient && state.selectedClient === currentDbClient) {
+        saveCurrentInputs();
+        const _existingSet = new Set();
+        for (const _row of state.rows) {
+          if (_row.itemCode) _existingSet.add(_row.itemCode.trim().toUpperCase());
+          if (_row.po) _existingSet.add(_row.po.trim().toUpperCase());
+        }
+        let _addedCount = 0;
+        for (const _item of items) {
+          const _code = _item.customerCode.toUpperCase();
+          if (!_existingSet.has(_code)) {
+            state.rows.push({
+              po: '',
+              itemCode: _item.customerCode,
+              flex: _item.flex || '',
+              nfItem: _item.nfItem || '',
+              qty: '',
+              unitPrice: _item.price,
+              amount: ''
+            });
+            _existingSet.add(_code);
+            _addedCount++;
+          }
+        }
+        if (_addedCount > 0) {
+          renderRows();
+          updateSummary();
+          toast('+ ' + _addedCount + ' new items added to order', 'success');
+        }
+      }
     } catch(err) {
       toast('Error reading file: ' + err.message, 'error');
     }
